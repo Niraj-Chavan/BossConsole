@@ -614,6 +614,32 @@ restart. There is no Settings row and no per-site exclusion.
   paths outside it, canonical and symlink-checked. A plugin that needs project
   search should be vetted the same way one that subscribes to the bus is.
 
+### Where the events actually go
+
+Collection (above) and egress are separate: the host only publishes onto the event bus,
+and the analytics plugin decides whether anything leaves the machine. By default it
+posts to the **`analytics-ingest` Edge Function** in this repo rather than to a vendor
+directly, because the vendor credential cannot be protected on a client - anything
+stored or injected on a user's machine is readable by that user, whatever its file mode.
+The function holds `AMPLITUDE_API_KEY` and does the vendor mapping.
+
+Two consequences worth knowing before relying on this data:
+
+- **The vendor sees the function's address, not the user's.** A request IP is itself
+  identifying, and Amplitude derives geolocation from it by default, so routing through
+  the function removes client IPs from what a third party receives.
+- **Vendor mapping is server-side**, so changing analytics backend is a function deploy
+  rather than a plugin release for every install.
+
+Function secrets: `AMPLITUDE_API_KEY` (required), `AMPLITUDE_ENDPOINT` (optional,
+defaults to the US region), `ANALYTICS_INGEST_KEY` (optional shared secret; when set,
+clients must send the same value as `BOSS_ANALYTICS_INGEST_KEY`). Deploy with
+`supabase functions deploy analytics-ingest` - no workflow deploys Edge Functions, and
+`edge-functions.yml` only checks and tests them.
+
+Treat `identity.distinctId` in that payload as a client-asserted label rather than an
+authenticated principal, and do not build anything downstream that assumes otherwise.
+
 ## Two-finger swipe navigation (macOS)
 
 A two-finger horizontal trackpad swipe navigates back/forward. It is detected **inside the page**
