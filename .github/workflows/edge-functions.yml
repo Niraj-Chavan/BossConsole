@@ -151,7 +151,10 @@ jobs:
         run: find . -name '*.ts' -print0 | sort -z | xargs -0 -r deno check
 
       - name: 🧪 Tests
-        run: deno test --allow-env
+        # --allow-read: tests/client-contract.test.ts reads the committed payload the
+        # real client produces, so a validator that drifts away from what the plugin
+        # sends fails here rather than as telemetry quietly stopping in production.
+        run: deno test --allow-env --allow-read
 
       - name: 🧹 Lint
         # Gating, like the organisation job and for the same reason: this function is
