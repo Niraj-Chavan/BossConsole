@@ -135,7 +135,7 @@ class BrowserClipboardCommandsTest {
                 focusedFrame = null,
                 mainFrame = null,
                 command = EditorCommand.cut(),
-            )
+            ),
         )
     }
 
@@ -155,7 +155,7 @@ class BrowserClipboardCommandsTest {
                 focusedFrame = refusing.frame,
                 mainFrame = null,
                 command = EditorCommand.copy(),
-            )
+            ),
         )
         assertTrue(
             executeEditorCommand(
@@ -163,7 +163,7 @@ class BrowserClipboardCommandsTest {
                 focusedFrame = RecordingFrame(accepts = true).frame,
                 mainFrame = null,
                 command = EditorCommand.copy(),
-            )
+            ),
         )
     }
 

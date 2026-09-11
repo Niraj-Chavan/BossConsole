@@ -3647,7 +3647,7 @@ internal class BrowserHandleImpl(
         // editorCommand(EditorCommand.paste(), "Copy") compile and mislabel every log line it
         // produced.
         val what = command.name().name
-        
+
         // Consume the context menu frame: it is valid for one editor command initiated from that menu.
         val menuFrame = contextMenuTargetFrame?.get()
         contextMenuTargetFrame = null
