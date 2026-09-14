@@ -1938,9 +1938,41 @@ draws one trailing icon, so the row that is showing gets a check and every other
 signal colour - filled for a dark theme, a ring for a light one, because Blueprint and Blueprint
 Light share an identical `#0F5BFF` signal and hue cannot separate them.
 
+**A materialised Space inherits its template's theme**, written through `setSpaceTheme` in
+`WorkspaceTemplate.materialisedAndSaved` before the Space is entered. Without it, picking a
+template FLASHED: the pick enters the template and applies its baked default, then `spaceToOpen`
+materialises a new Space with a fresh `generateId()` and enters that, and a fresh id is neither a
+built-in nor an override, so it fell to the Settings baseline. Two Spaces entered back to back, not
+a race. Written down rather than re-derived, so the new Space owns its theme and a later change to
+a shipped template's default cannot silently move it. The no-project path needs nothing: it applies
+the template as itself, keeping the template's own id.
+
+That pick used to enter a THIRD Space. `WorkspaceButton`'s menu row called `loadWorkspace` before
+handing to `onOpenWorkspace`, which is `WorkspaceSwitch.request` and does the whole job itself - so
+the row was entering the picked Space and then the switch entered what it materialised. It also lied
+to the switch, which reads `currentWorkspace` as the Space being LEFT: pre-setting it to the one
+being entered made `leaving.id == workspace.id` and skipped the keep-or-close question outright.
+That line is gone rather than made to agree.
+
+**The disk read is a SEED, and `spaceThemesAssigned` is what stops it landing on a decision.**
+`loadSpaceThemes` is asynchronous, and the template inheritance assigns in the first moments of a
+manager's life - so the file used to overwrite that assignment, silently and only sometimes.
+Merging the two maps instead would fix a set and break a CLEAR, since a cleared key is absent from
+both and the file would put it back.
+
+**Spaces materialised before this shipped keep no inherited theme, and that is accepted rather
+than migrated.** Nothing records which template a Space came from: `LayoutWorkspace` carries no
+provenance and the name is a string a user can also type, so a migration would have to guess, and
+guessing wrong assigns a theme nobody chose - worse than the neutral baseline it has now. They are
+one right-click away from the theme their owner wants.
+
 Plugins see the result through `ActiveTabsProvider.workspaceAccents`, a
 `StateFlow<Map<String, Color>>` served from `WorkspaceManager.spaceAccents` and keyed over every
-Space the app knows.
+Space the app knows; `availableThemes` and `setWorkspaceTheme` let a panel offer the choice, and
+`workspaceThemeId` says which one a Space resolves to. That last one is not a duplicate of the
+accents flow: a tint wants a COLOUR and wants it live, a picker wants an IDENTITY when it opens -
+and Blueprint and Blueprint Light share an accent exactly, so a picker marking by colour ticks
+both.
 
 ## The product word is "Space", the code word is `workspace`
 

@@ -249,10 +249,21 @@ fun WorkspaceButton(
                         secondaryTrailingIcon = Icons.Filled.Circle.takeIf { marks.unsaved },
                         secondaryTrailingIconColor = BossTheme.colors.signalText,
                         secondaryTrailingDescription = SPACE_UNSAVED_ROW_DESCRIPTION,
-                        onClick = {
-                            workspaceManager.loadWorkspace(workspace)
-                            onOpenWorkspace(workspace)
-                        },
+                        // `onOpenWorkspace` is `WorkspaceSwitch.request`, which does the whole
+                        // job - it materialises a template, loads what that produced and applies
+                        // it. Loading the picked row HERE was redundant and did two kinds of harm.
+                        //
+                        // A BOSS theme belongs to a Space, so entering the row was entering a
+                        // Space: picking a TEMPLATE applied its theme, and the materialised copy
+                        // that actually opened a moment later applied its own. That flash is gone
+                        // with this line rather than made to land on the same colour, because the
+                        // intermediate entry was doing everything else twice as well.
+                        //
+                        // It also lied to the switch. `request` reads `currentWorkspace` as the
+                        // Space being LEFT, so pre-setting it to the one being entered made
+                        // `leaving.id == workspace.id` and skipped the keep-or-close question
+                        // outright.
+                        onClick = { onOpenWorkspace(workspace) },
                     ),
                 )
             }

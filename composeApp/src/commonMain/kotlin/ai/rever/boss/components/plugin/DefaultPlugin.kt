@@ -43,6 +43,7 @@ import ai.rever.boss.plugin.api.ApplicationEventBus
 import ai.rever.boss.plugin.api.AuthDataProvider
 import ai.rever.boss.plugin.api.BackgroundTaskHandle
 import ai.rever.boss.plugin.api.BackgroundTaskProvider
+import ai.rever.boss.plugin.api.BossThemeOption
 import ai.rever.boss.plugin.api.CacheProvider
 import ai.rever.boss.plugin.api.ClipboardProvider
 import ai.rever.boss.plugin.api.ContextMenuProvider
@@ -95,6 +96,7 @@ import ai.rever.boss.plugin.sandbox.health.PluginHealthSummary
 import ai.rever.boss.plugin.sandbox.notification.BossPluginNotificationService
 import ai.rever.boss.plugin.sandbox.notification.PluginSandboxNotificationListener
 import ai.rever.boss.plugin.sandbox.notification.PluginToastState
+import ai.rever.boss.plugin.ui.BossThemes
 import ai.rever.boss.plugin.ui.ContextMenuItemData
 import ai.rever.boss.search.ContentSearchService
 import ai.rever.boss.search.SearchRegistryImpl
@@ -1564,6 +1566,57 @@ private class ApiActiveTabsProviderAdapter(
      */
     override val workspaceAccents: StateFlow<Map<String, androidx.compose.ui.graphics.Color>>
         get() = workspaceManager.spaceAccents
+
+    /**
+     * The themes this build ships, in the picker's own display order.
+     *
+     * `BossThemes.all` is host-internal, so this is the only way a plugin can learn that Blueprint
+     * exists, let alone what it looks like. Mapped rather than held, because it is six items read
+     * when a picker opens.
+     */
+    override val availableThemes: List<BossThemeOption>
+        get() =
+            BossThemes.all.map { theme ->
+                BossThemeOption(
+                    id = theme.id,
+                    name = theme.name,
+                    isLight = theme.isLight,
+                    accent = theme.colors.signal,
+                    surface = theme.colors.panel,
+                )
+            }
+
+    /**
+     * Give a Space a theme, through the SAME writer the host's own Space menu uses.
+     *
+     * `WorkspaceManager.setSpaceTheme` is the one path that writes `Space_Themes.json`: it goes
+     * through `withSpaceTheme` (so a choice that merely restates the default still collapses to no
+     * entry), applies live when the Space is the one on screen, and publishes into
+     * `spaceThemes`/`spaceAccents`, which is what makes the plugin's own tint follow its own
+     * write. A second writer here would be a second answer about one file.
+     *
+     * Validated before it is passed on, and the refusal is the return value rather than a silent
+     * no-op: `setSpaceTheme` ignores an unknown id by design, so without this a plugin could not
+     * tell a theme this build has retired from one it applied.
+     */
+    override fun setWorkspaceTheme(
+        workspaceId: String,
+        themeId: String,
+    ): Boolean {
+        if (workspaceId.isEmpty() || BossThemes.all.none { it.id == themeId }) return false
+        workspaceManager.setSpaceTheme(workspaceId, themeId)
+        return true
+    }
+
+    /**
+     * Which theme a Space RESOLVES to - its own, then its template's, then the Settings baseline -
+     * which is `WorkspaceManager.themeIdFor`, the same function the switch itself calls.
+     *
+     * Resolved rather than "does it have one of its own": a picker is asking what to tick, and the
+     * answer is what the Space is showing, not whether someone chose it.
+     */
+    override fun workspaceThemeId(workspaceId: String): String? =
+        workspaceId.takeIf { it.isNotEmpty() }?.let { workspaceManager.themeIdFor(it) }
 
     override suspend fun moveTabToWorkspace(
         tabId: String,

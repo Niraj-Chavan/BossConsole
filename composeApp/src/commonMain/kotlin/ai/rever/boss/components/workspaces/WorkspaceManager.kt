@@ -169,6 +169,18 @@ class WorkspaceManager {
     val spaceThemes: StateFlow<Map<String, String>> = _spaceThemes.asStateFlow()
 
     /**
+     * Whether anything has assigned a Space theme since this manager was built.
+     *
+     * The disk read is a SEED, and a seed must not land on top of a decision. [loadSpaceThemes] is
+     * asynchronous, so a `setSpaceTheme` made while it is still in flight - the template
+     * inheritance in `WorkspaceTemplate` does exactly that, in the first moments of a manager's
+     * life - was overwritten by whatever the file happened to say, silently and only sometimes.
+     * Merging the two instead would fix a set and break a CLEAR, since a cleared key is absent
+     * from both maps and the file would put it back.
+     */
+    private var spaceThemesAssigned = false
+
+    /**
      * The colour each Space is wearing, by workspace id, for `ActiveTabsProvider.workspaceAccents`.
      *
      * Keyed over every Space the app knows - the eight shipped layouts and everything saved
@@ -214,6 +226,9 @@ class WorkspaceManager {
         themeId: String?,
     ) {
         val updated = withSpaceTheme(_spaceThemes.value, workspaceId, themeId, SettingsThemeBaseline.themeId.value)
+        // Marked even when nothing moves, because "the answer is already what you asked for" is
+        // still a decision the seed must not overwrite.
+        spaceThemesAssigned = true
         if (updated == _spaceThemes.value) return
         _spaceThemes.value = updated
         // Only when it is the Space on screen: re-theming a Space you are not in must not re-skin
@@ -249,7 +264,8 @@ class WorkspaceManager {
                 // `spaceThemesDocument`), so there is no innocent case this shouts about.
                 logger.warn(LogCategory.WORKSPACE, "Space themes record could not be read")
             }
-            _spaceThemes.value = assignments
+            // The seed lands only on a store nobody has written to yet. See [spaceThemesAssigned].
+            if (!spaceThemesAssigned) _spaceThemes.value = assignments
             // Re-resolve whatever is already on screen. This read is asynchronous and the session
             // restore does not wait for it, so a Space entered first would be sitting on the
             // Settings theme rather than its own until the next switch.

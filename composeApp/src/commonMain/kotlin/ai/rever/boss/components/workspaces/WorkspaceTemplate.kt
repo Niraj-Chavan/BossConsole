@@ -228,6 +228,21 @@ private suspend fun materialisedAndSaved(
 ): LayoutWorkspace {
     val materialised =
         materialiseTemplateForProject(template, projectPath, savedSpaceNames(manager.workspaces.value))
+    // The Space inherits its template's THEME, and it has to happen before the load.
+    //
+    // A BOSS theme belongs to a Space, and `loadWorkspace` is what applies one - so picking a
+    // template used to flash. Entering the template applied its baked default; entering the
+    // materialised copy a moment later found a fresh `generateId()` that is neither a built-in nor
+    // an override, and fell through to the Settings baseline. Two Spaces entered back to back,
+    // which is why it looked like a race and was not one.
+    //
+    // Written through `setSpaceTheme` - the one writer - rather than derived on the way out, so
+    // the new Space OWNS its theme: re-deriving from the template later would silently re-theme
+    // somebody's months-old Space the day a shipped default changed. It is the RESOLVED theme, so
+    // a user who re-themed the template passes that on rather than the baked value; and if that
+    // resolves to the baseline, `withSpaceTheme` writes nothing, which is correct - a Space with
+    // no theme of its own is exactly what riding the baseline means.
+    manager.setSpaceTheme(materialised.id, manager.themeIdFor(template.id))
     // Load then save, which is how every other save in the app writes a Space:
     // saveCurrentWorkspace() persists whatever the manager holds as current, under its own name.
     manager.loadWorkspace(materialised)
