@@ -515,4 +515,44 @@ class SplitViewWorkspaceTransferTest {
         assertNotNull(state.activePanelIdForWorkspace("ws-a"))
         assertNull(state.activePanelIdForWorkspace("ws-never-opened"))
     }
+
+    /**
+     * The case a naive implementation passes by accident: if `closeWorkspace` quietly fell back to
+     * closing the CURRENT workspace, a test that only checked "a workspace went away" would still
+     * see one go. So this asserts both halves - the named one is gone AND the one on screen is not.
+     */
+    @Test
+    fun `closes a workspace that is not the one on screen, and leaves the current one alone`() {
+        val state = newSplitViewState()
+        state.enterWorkspace("ws-a", "tab-a")
+        state.enterWorkspace("ws-b", "tab-b")
+
+        assertTrue(state.closeWorkspace("ws-a"))
+
+        assertEquals(emptyList(), state.tabIdsIn("ws-a"))
+        assertEquals(listOf("tab-b"), state.tabIdsIn("ws-b"))
+    }
+
+    /** A workspace this window is not running cannot be closed, and says so rather than pretending. */
+    @Test
+    fun `refuses a workspace that is not running here`() {
+        val state = newSplitViewState()
+        state.enterWorkspace("ws-a", "tab-a")
+
+        assertFalse(state.closeWorkspace("ws-never-opened"))
+        assertEquals(listOf("tab-a"), state.tabIdsIn("ws-a"))
+    }
+
+    /** Closing the one on screen is still allowed, and empties it the way the current-only form did. */
+    @Test
+    fun `closes the workspace on screen too`() {
+        val state = newSplitViewState()
+        state.enterWorkspace("ws-a", "tab-a")
+        state.enterWorkspace("ws-b", "tab-b")
+
+        assertTrue(state.closeWorkspace("ws-b"))
+
+        assertEquals(emptyList(), state.tabIdsIn("ws-b"))
+        assertEquals(listOf("tab-a"), state.tabIdsIn("ws-a"))
+    }
 }

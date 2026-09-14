@@ -1786,6 +1786,31 @@ class SplitViewState(
         getAllPanels().forEach { panel -> panel.tabsComponent.clearAllTabs() }
     }
 
+    /**
+     * Stop running [workspaceId], whether or not it is the one on screen.
+     *
+     * [closeCurrentWorkspace] cannot do this and the reason is structural rather than an
+     * oversight: it clears tabs through [getAllPanels], which reads `_rootNode.value`, so it only
+     * ever reaches the tree being shown. [panelsInWorkspace] walks the preserved trees as well -
+     * it was added for cross-workspace tab addressing - so a Space this window is merely holding
+     * can now be closed from a list that names it, which is what Top of Mind's Space rows are.
+     *
+     * Closing the CURRENT Space leaves the window on an emptied tree, exactly as
+     * [closeCurrentWorkspace] does; closing any other simply drops it. The saved file is untouched
+     * either way, so a closed Space reopens from the picker - but its unsaved arrangement is gone,
+     * because nothing preserved it.
+     *
+     * @return true if the Space was running here. False means it was not, so nothing was closed.
+     */
+    fun closeWorkspace(workspaceId: String): Boolean {
+        val isCurrent = workspaceId == _currentWorkspaceId
+        if (!isCurrent && !preservedWorkspaceStates.containsKey(workspaceId)) return false
+        val panels = panelsInWorkspace(workspaceId)
+        preservedWorkspaceStates.remove(workspaceId)
+        panels.forEach { panel -> panel.tabsComponent.clearAllTabs() }
+        return true
+    }
+
     fun restorePreservedState(workspaceId: String): Boolean {
         // Check if we have a preserved state for this workspace
         val preservedState = preservedWorkspaceStates[workspaceId]

@@ -1785,6 +1785,21 @@ private class ApiActiveTabsProviderAdapter(
         }
     }
 
+    override fun closeWorkspace(workspaceId: String): Boolean =
+        try {
+            // Any Space this window runs, not only the one showing - see SplitViewState.closeWorkspace
+            // for why the current-only form could not serve a list that names every running Space.
+            splitViewState.closeWorkspace(workspaceId)
+        } catch (e: Exception) {
+            tabsLogger.warn(
+                LogCategory.UI,
+                "closeWorkspace failed",
+                mapOf("workspaceId" to workspaceId),
+                error = e,
+            )
+            false
+        }
+
     override fun closeTab(tabId: String): Boolean =
         try {
             // Every workspace this window is running, not only the one on screen. getAllPanels
