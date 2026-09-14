@@ -1554,6 +1554,17 @@ private class ApiActiveTabsProviderAdapter(
 
     override val liveWorkspaceIds: Set<String> get() = splitViewState.liveWorkspaceIds
 
+    /**
+     * What colour each Space is wearing, straight off the manager that decides it.
+     *
+     * Process-wide rather than per-window, like `allWindowTabs` and for the same reason: a Space
+     * has one theme wherever it is running, and one adapter per window each deriving its own would
+     * be N answers to one question. `WorkspaceManager` is a single instance the whole app shares,
+     * so this is a pass-through with nothing to recompute.
+     */
+    override val workspaceAccents: StateFlow<Map<String, androidx.compose.ui.graphics.Color>>
+        get() = workspaceManager.spaceAccents
+
     override suspend fun moveTabToWorkspace(
         tabId: String,
         targetWorkspaceId: String,

@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Settings
@@ -90,6 +91,12 @@ fun WorkspaceButton(
     val currentWorkspace by workspaceManager.currentWorkspace.collectAsState()
     val workspaces by workspaceManager.workspaces.collectAsState()
 
+    // A BOSS theme belongs to a Space, so this menu is where one is given: both are collected
+    // rather than read, because the submenu's tick has to move the moment the theme does - the
+    // menu can be open while the app re-skins under it.
+    val spaceThemes by workspaceManager.spaceThemes.collectAsState()
+    val settingsThemeId by SettingsThemeBaseline.themeId.collectAsState()
+
     // Every workspace running anywhere - in this window behind the one on screen, or in another
     // window. The menu could previously mark exactly one, so everything else looked equally idle
     // whether it was running or not.
@@ -148,6 +155,28 @@ fun WorkspaceButton(
                     },
                 ),
             )
+
+            // The Space on screen wears a theme of its own, and this is where it is given one.
+            // Above the divider, with the things you do TO this Space, rather than beside Open
+            // Space Folder and Reset to Default - those two are about the app's idea of Spaces.
+            val themeItems =
+                spaceThemeMenuItems(
+                    workspaceId = currentWorkspace?.id.orEmpty(),
+                    overrides = spaceThemes,
+                    settingsThemeId = settingsThemeId,
+                    onChoose = { themeId ->
+                        currentWorkspace?.id?.let { workspaceManager.setSpaceTheme(it, themeId) }
+                    },
+                )
+            if (themeItems.isNotEmpty()) {
+                add(
+                    ContextMenuItem(
+                        text = "Space Theme",
+                        icon = Icons.Outlined.Palette,
+                        subMenu = themeItems,
+                    ),
+                )
+            }
 
             // Top of mind option
             if (onShowTopOfMind != null) {

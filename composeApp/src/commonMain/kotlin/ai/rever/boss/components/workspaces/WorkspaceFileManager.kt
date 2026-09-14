@@ -65,15 +65,18 @@ expect class WorkspaceFileManager(
      * Make [fileName] in the workspace directory hold [content], or be ABSENT when [content] is
      * null. Returns whether the directory now says what was asked.
      *
-     * For records that live beside the Spaces without being one - `Last_Session_Set.json`. Not
-     * typed as a [LayoutWorkspace] because it is not one, and blocking rather than suspending
-     * because the shutdown path is the only caller: see [saveWorkspaceBlocking] for why a dispatch
-     * cannot be trusted while the process is closing.
+     * For records that live beside the Spaces without being one - `Last_Session_Set.json` and
+     * `Space_Themes.json`. Not typed as a [LayoutWorkspace] because neither is one, and blocking
+     * because the SHUTDOWN path needs it so: see [saveWorkspaceBlocking] for why a dispatch cannot
+     * be trusted while the process is closing. It is not only the shutdown path's any more -
+     * `WorkspaceManager.setSpaceTheme` writes through it from a running app, and takes itself to
+     * `Dispatchers.IO` first, which is what a blocking verb asks of a caller that can afford to.
      *
      * **Write and remove are ONE verb** because the caller has one intention - make the record on
      * disk be the truth - and the removal is not tidiness: a session-set file left over from a
      * three-Space session is read in preference to `Last_Session.json`, so leaving it would
-     * restore two Spaces the user had closed.
+     * restore two Spaces the user had closed. The theme record uses the same null for the same
+     * reason in a milder form: no Space having a theme of its own is exactly no file.
      */
     fun writeDocumentBlocking(
         fileName: String,

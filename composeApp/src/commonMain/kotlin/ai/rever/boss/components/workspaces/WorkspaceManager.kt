@@ -1,13 +1,19 @@
 package ai.rever.boss.components.workspaces
 
+import ai.rever.boss.plugin.ui.BossThemeController
+import ai.rever.boss.plugin.ui.BossThemes
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
+import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.time.Clock
@@ -151,9 +157,110 @@ class WorkspaceManager {
     // Callback for when a workspace is deleted
     private var onWorkspaceDeleted: ((String) -> Unit)? = null
 
+    /**
+     * Which theme each Space has been given, by workspace id - the OVERRIDES only.
+     *
+     * A Space that names none is not absent from the feature, it is riding a default:
+     * [TEMPLATE_SPACE_THEMES] for one of the eight layouts BOSS ships, and the Settings choice for
+     * everything else. [spaceThemeId] is what resolves the three; nothing should read this map
+     * without it.
+     */
+    private val _spaceThemes = MutableStateFlow<Map<String, String>>(emptyMap())
+    val spaceThemes: StateFlow<Map<String, String>> = _spaceThemes.asStateFlow()
+
+    /**
+     * The colour each Space is wearing, by workspace id, for `ActiveTabsProvider.workspaceAccents`.
+     *
+     * Keyed over every Space the app knows - the eight shipped layouts and everything saved
+     * ([workspaces] already holds both), plus whatever is running and whatever has an override -
+     * because the panels that read this are listing Spaces they are not in. The union is taken
+     * rather than [workspaces] alone so a Space running from a file that has since been deleted
+     * still has a colour while it is on screen.
+     *
+     * Derived from all three inputs, so it moves when a Space is re-themed AND when the Settings
+     * baseline changes: every Space with no theme of its own is riding that baseline, so a Settings
+     * pick has to repaint all of them.
+     */
+    val spaceAccents: StateFlow<Map<String, Color>> =
+        combine(
+            _workspaces,
+            _windowWorkspaces,
+            _spaceThemes,
+            SettingsThemeBaseline.themeId,
+        ) { spaces, windows, overrides, baseline ->
+            (spaces.map { it.id } + windows.values.flatten() + overrides.keys)
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .associateWith { BossThemes.byId(spaceThemeId(it, overrides, baseline)).colors.signal }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
+    /** The theme [workspaceId] should be showing, resolved through [spaceThemeId]. */
+    fun themeIdFor(workspaceId: String): String {
+        val overrides = _spaceThemes.value
+        return spaceThemeId(workspaceId, overrides, SettingsThemeBaseline.themeId.value)
+    }
+
+    /**
+     * Give [workspaceId] a theme of its own, or hand it back to its default when [themeId] is null.
+     *
+     * **`BossThemeController.select` and nothing else.** `AppThemeSettingsManager.select` would
+     * write the id into `app-theme-settings.json`, and after two Space switches the baseline the
+     * user chose in Settings would be gone - along with the answer for every Space that names no
+     * theme. A Space theme is an override LAYERED OVER that choice, which is why the two writes
+     * land in different files.
+     */
+    fun setSpaceTheme(
+        workspaceId: String,
+        themeId: String?,
+    ) {
+        val updated = withSpaceTheme(_spaceThemes.value, workspaceId, themeId, SettingsThemeBaseline.themeId.value)
+        if (updated == _spaceThemes.value) return
+        _spaceThemes.value = updated
+        // Only when it is the Space on screen: re-theming a Space you are not in must not re-skin
+        // the app out from under you.
+        if (_currentWorkspace.value?.id == workspaceId) applySpaceTheme(workspaceId)
+        scope.launch {
+            val written =
+                withContext(Dispatchers.IO) {
+                    fileManager.writeDocumentBlocking(SPACE_THEMES_FILE, spaceThemesDocument(updated))
+                }
+            if (!written) {
+                logger.warn(
+                    LogCategory.WORKSPACE,
+                    "Space theme write failed",
+                    mapOf("workspace" to workspaceId, "themes" to updated.size.toString()),
+                )
+            }
+        }
+    }
+
+    /** Put the app on [workspaceId]'s theme. A no-op for an id whose answer is already showing. */
+    private fun applySpaceTheme(workspaceId: String) {
+        BossThemeController.select(themeIdFor(workspaceId))
+    }
+
+    private fun loadSpaceThemes() {
+        scope.launch {
+            val json = fileManager.loadDocument(SPACE_THEMES_FILE)
+            val assignments = spaceThemesFrom(json)
+            if (json != null && assignments.isEmpty()) {
+                // There were bytes and they said nothing: a broken record, or one naming only
+                // themes this build has retired. An empty map is never written (see
+                // `spaceThemesDocument`), so there is no innocent case this shouts about.
+                logger.warn(LogCategory.WORKSPACE, "Space themes record could not be read")
+            }
+            _spaceThemes.value = assignments
+            // Re-resolve whatever is already on screen. This read is asynchronous and the session
+            // restore does not wait for it, so a Space entered first would be sitting on the
+            // Settings theme rather than its own until the next switch.
+            _currentWorkspace.value?.let { applySpaceTheme(it.id) }
+        }
+    }
+
     init {
         // Load workspaces from both predefined and saved files
         loadAllWorkspaces()
+        loadSpaceThemes()
     }
 
     private fun loadAllWorkspaces() {
@@ -171,6 +278,9 @@ class WorkspaceManager {
                     // is "every *.json", so without this it is deserialized as one on every
                     // launch, fails, and logs a warning for ever. See LAST_SESSION_SET_FILE.
                     if (fileInfo.fileName == LAST_SESSION_SET_FILE) return@forEach
+                    // And the Space-to-theme record, beside it and not a Space either. See
+                    // SPACE_THEMES_FILE.
+                    if (fileInfo.fileName == SPACE_THEMES_FILE) return@forEach
                     val workspace =
                         withContext(Dispatchers.IO) {
                             fileManager.loadWorkspace(fileInfo.fileName)
@@ -200,10 +310,21 @@ class WorkspaceManager {
     }
 
     /**
-     * Load a workspace
+     * Load a workspace - ENTER this Space, which is also what re-skins the app.
+     *
+     * **The one door.** Every way into a Space goes through here: the Space button and its menu,
+     * the picker, the switch path, a deep link, the CLI, a plugin's `WorkspaceDataProvider`, the
+     * fresh-start default and both session restores. Hanging the theme off this rather than off a
+     * collector on [currentWorkspace] is what keeps a rename or a save - which also write that
+     * flow - from being read as entering somewhere.
+     *
+     * With two windows on different Spaces the last switch wins, because there is one
+     * `BossThemeController` for the process and one app to skin. That is accepted, and it is the
+     * same thing [currentWorkspace] itself has always done.
      */
     fun loadWorkspace(workspace: LayoutWorkspace) {
         _currentWorkspace.value = workspace
+        applySpaceTheme(workspace.id)
     }
 
     /**

@@ -1892,6 +1892,56 @@ exist. In practice every id in a set came from that list, since a Space has to h
 be running; the case that reaches it is a Space whose file was deleted while it was running, where
 dropping it is the existing behaviour.
 
+## A BOSS theme belongs to a Space
+
+Entering a Space re-skins the whole app. `WorkspaceManager.loadWorkspace` is the one door - every
+way in goes through it (the Space button and its menu, the picker, `WorkspaceSwitch`, deep links,
+the CLI, a plugin's `WorkspaceDataProvider`, the fresh-start default, both session restores) - and
+it calls `BossThemeController.select` with whatever that Space resolves to.
+
+**Hung off `loadWorkspace`, not off a collector on `currentWorkspace`.** That flow is also written
+by a save and by a rename, neither of which is entering anywhere; a collector would re-theme on
+both. With two windows on different Spaces the last switch wins, which is accepted and is what
+`currentWorkspace` itself has always done.
+
+**`BossThemeController.select`, never `AppThemeSettingsManager.select`.** The latter validates,
+selects AND writes `app-theme-settings.json`; calling it on every switch would destroy the baseline
+the user picked in Settings, and after two switches there would be nothing left to fall back to for
+a Space that names no theme. A Space theme is an **override layered over** that baseline, which is
+why the two writes land in different files. On restart the Settings theme is applied first
+(`AppThemeSettingsManager.ensureInitialized`) and the session restore then enters its Spaces, the
+one left showing having the last word.
+
+**Resolution is `spaceThemeId`**: the Space's own override, then the baked template default, then
+the Settings baseline - skipping, at every level, any id this build does not know, because
+`BossThemeController.select` no-ops on an unknown id and would leave whatever the last Space set.
+
+**Persistence is a side document, `Space_Themes.json`, not a field on `LayoutWorkspace`.** That data
+class is the plugin api type, member-checked against 33 plugin repos. Same reasoning and same verb
+as `Last_Session_Set.json` (`WorkspaceFileManager.writeDocumentBlocking` / `loadDocument`), and the
+same gotcha: `loadAllWorkspaces` lists every `*.json` and reads each as a Space, so the new file is
+skipped **by name** exactly as `LAST_SESSION_SET_FILE` is.
+
+**Template defaults are BAKED (`TEMPLATE_SPACE_THEMES`), not written out**, so shipping a different
+default for a template later reaches everyone who has not chosen otherwise and needs no migration.
+Which is also why `withSpaceTheme` **removes** an entry that merely restates the current default -
+writing it down would pin that template for that user for ever, silently.
+
+Two of the eight are forced rather than chosen: Claude Code carries `UNIX_DEFAULT_ID` and Browser
+Only carries `WINDOWS_DEFAULT_ID`, because those are the layouts each platform opens with and
+anything else would flip a first run off its platform default the instant it entered its own
+default Space. Daylight is on none of them - its recorded contrast debt is exactly why it is not
+the Windows default, and a baked template theme is met without being chosen.
+
+Setting one is `Options > Space Theme` on the Space button (`spaceThemeMenuItems`). A submenu row
+draws one trailing icon, so the row that is showing gets a check and every other row gets its own
+signal colour - filled for a dark theme, a ring for a light one, because Blueprint and Blueprint
+Light share an identical `#0F5BFF` signal and hue cannot separate them.
+
+Plugins see the result through `ActiveTabsProvider.workspaceAccents`, a
+`StateFlow<Map<String, Color>>` served from `WorkspaceManager.spaceAccents` and keyed over every
+Space the app knows.
+
 ## The product word is "Space", the code word is `workspace`
 
 What a person reads in BOSS is a **Space**. What the code calls it is still `workspace`,
