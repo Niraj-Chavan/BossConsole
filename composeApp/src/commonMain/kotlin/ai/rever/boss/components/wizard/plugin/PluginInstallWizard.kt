@@ -590,7 +590,7 @@ internal fun InstallingStepContent(
                     val index = plugins.indexOf(plugin)
                     val label =
                         when {
-                            index < completedCount -> "Installed"
+                            index < completedCount -> "Processed"
                             index == completedCount -> "Installing"
                             else -> "Waiting"
                         }
@@ -599,7 +599,7 @@ internal fun InstallingStepContent(
             }
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = "$completedCount of ${plugins.size} tools installed",
+                text = "$completedCount of ${plugins.size} tools processed",
                 fontSize = 11.sp,
                 color = BossTheme.colors.textSecondary,
                 modifier = Modifier.align(Alignment.End),
@@ -766,7 +766,7 @@ private fun BossTermOfferContent(
     onFinish: () -> Unit,
 ) {
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.Center,
     ) {
         Box(

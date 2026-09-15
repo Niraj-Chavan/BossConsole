@@ -603,7 +603,6 @@ internal fun BossAppMenuActionEffects(
         MenuActionsHandler.showTerminalOnboardingEvents
             .onEach { eventWindowId ->
                 if (eventWindowId == windowId) {
-                    state.showTerminalOnboardingWizard = true
                     state.terminalOnboardingOwnerStarted = true
                     state.terminalOnboardingRequestGeneration++
                 }

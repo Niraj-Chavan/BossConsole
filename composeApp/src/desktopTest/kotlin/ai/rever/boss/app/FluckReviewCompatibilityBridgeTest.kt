@@ -1,9 +1,12 @@
 package ai.rever.boss.app
 
 import ai.rever.boss.plugin.api.CustomPluginEvent
+import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class FluckReviewCompatibilityBridgeTest {
     @Test
@@ -44,10 +47,89 @@ class FluckReviewCompatibilityBridgeTest {
         assertEquals(false, request.isSetupOpenRequest("window-1"))
     }
 
+    @Test
+    fun `addressed malformed request carries reason and safe acknowledgement ids`() {
+        val route = event(expiresAtMs = "soon").routeSetupFluckOpenRequest("window-1", 1_000)
+
+        assertTrue(route is SetupFluckOpenRoute.Reject)
+        assertEquals("missing or malformed expiry", route.reason)
+        assertTrue(route.canAcknowledge)
+        val acknowledgement =
+            setupDebugAcknowledgement(
+                route.requestId!!,
+                route.terminalId!!,
+                accepted = false,
+                error = route.reason,
+            )
+        assertEquals(false, acknowledgement.payload["accepted"])
+        assertEquals(route.reason, acknowledgement.payload["error"])
+    }
+
+    @Test
+    fun `integer expiry is accepted without weakening exact numeric validation`() {
+        val route = event(expiresAtMs = 2_000).routeSetupFluckOpenRequest("window-1", 1_000)
+
+        assertTrue(route is SetupFluckOpenRoute.Accept)
+    }
+
+    @Test
+    fun `bounded delivery ledger makes duplicates idempotent and accepts later requests`() {
+        val ledger = DeliveredSetupRequestLedger(capacity = 2)
+        val first = request("request-1")
+
+        assertEquals(DeliveredSetupRequestLedger.Classification.NEW, ledger.classify(first))
+        ledger.recordDelivered(first)
+        assertEquals(DeliveredSetupRequestLedger.Classification.DUPLICATE, ledger.classify(first))
+        assertEquals(
+            DeliveredSetupRequestLedger.Classification.CONFLICT,
+            ledger.classify(first.copy(prompt = "different setup data")),
+        )
+        ledger.recordDelivered(request("request-2"))
+        ledger.recordDelivered(request("request-3"))
+        assertEquals(DeliveredSetupRequestLedger.Classification.NEW, ledger.classify(first))
+    }
+
+    @Test
+    fun `undelivered request remains retryable after unavailable panel or publish failure`() {
+        val ledger = DeliveredSetupRequestLedger()
+        val request = request("request-1")
+
+        // An unavailable panel does not attempt delivery.
+        assertEquals(DeliveredSetupRequestLedger.Classification.NEW, ledger.classify(request))
+        assertFailsWith<IllegalStateException> {
+            ledger.deliverAndRecord(request) { error("publish failed") }
+        }
+        assertEquals(DeliveredSetupRequestLedger.Classification.NEW, ledger.classify(request))
+
+        ledger.deliverAndRecord(request) {}
+        assertEquals(DeliveredSetupRequestLedger.Classification.DUPLICATE, ledger.classify(request))
+    }
+
+    @Test
+    fun `one failing event does not prevent the next event`() {
+        var failures = 0
+        var handled = 0
+
+        isolateSetupBridgeEvent(onFailure = { failures++ }) { error("broken plugin event") }
+        isolateSetupBridgeEvent(onFailure = { failures++ }) { handled++ }
+
+        assertEquals(1, failures)
+        assertEquals(1, handled)
+    }
+
+    @Test
+    fun `event isolation preserves coroutine cancellation`() {
+        assertFailsWith<CancellationException> {
+            isolateSetupBridgeEvent(onFailure = { error("must not log cancellation") }) {
+                throw CancellationException("cancelled")
+            }
+        }
+    }
+
     private fun event(
         source: String = TERMINAL_PLUGIN_ID,
         windowId: String = "window-1",
-        expiresAtMs: Long = 2_000,
+        expiresAtMs: Any = 2_000L,
         prompt: String = "Inspect this setup terminal",
     ): CustomPluginEvent =
         CustomPluginEvent(
@@ -62,4 +144,6 @@ class FluckReviewCompatibilityBridgeTest {
                     "prompt" to prompt,
                 ),
         )
+
+    private fun request(id: String) = SetupFluckOpenRequest(id, "terminal-1", "Inspect this setup terminal")
 }
