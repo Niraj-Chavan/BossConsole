@@ -1,3 +1,5 @@
+@file:Suppress("TooManyFunctions") // One cohesive collection of stateless wizard composables.
+
 package ai.rever.boss.components.wizard.plugin
 
 import ai.rever.boss.plugin.ui.BossTheme
@@ -252,7 +254,9 @@ internal fun ProfileStepContent(
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "This only sets the initial tool selection. It does not affect permissions, and you can change tools next.",
+            text =
+                "This only sets the initial tool selection. It does not affect permissions, " +
+                    "and you can change tools next.",
             fontSize = 13.sp,
             color = BossTheme.colors.textSecondary,
         )
@@ -308,13 +312,29 @@ private fun ProfileChoiceRow(
             Modifier.size(32.dp).clip(RoundedCornerShape(7.dp)).background(BossTheme.colors.panel),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, null, Modifier.size(17.dp), if (selected) BossTheme.colors.signalText else BossTheme.colors.textSecondary)
+            Icon(
+                icon,
+                null,
+                Modifier.size(17.dp),
+                if (selected) BossTheme.colors.signalText else BossTheme.colors.textSecondary,
+            )
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(profile.displayName, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = BossTheme.colors.textPrimary)
+            Text(
+                profile.displayName,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = BossTheme.colors.textPrimary,
+            )
             Spacer(Modifier.height(2.dp))
-            Text(profile.description, fontSize = 10.sp, color = BossTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                profile.description,
+                fontSize = 10.sp,
+                color = BossTheme.colors.textMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         Spacer(Modifier.width(12.dp))
         Text("$toolCount tools", fontSize = 10.sp, color = BossTheme.colors.textSecondary)
@@ -333,6 +353,7 @@ private fun ProfileChoiceRow(
 }
 
 @Composable
+@Suppress("LongMethod") // Declarative Compose layout.
 internal fun ReviewStepContent(
     plugins: List<WizardPluginInfo>,
     isPluginSelected: (String) -> Boolean,
@@ -368,7 +389,11 @@ internal fun ReviewStepContent(
             ReviewMetric(selectedCount.toString(), "selected", Modifier.weight(1f))
             ReviewMetric(coreCount.toString(), "core", Modifier.weight(1f))
             ReviewMetric(profileCount.toString(), "for your work", Modifier.weight(1f))
-            ReviewMetric(dependencyCount.toString(), if (dependencyCount == 1) "dependency" else "dependencies", Modifier.weight(1f))
+            ReviewMetric(
+                dependencyCount.toString(),
+                if (dependencyCount == 1) "dependency" else "dependencies",
+                Modifier.weight(1f),
+            )
         }
         Spacer(modifier = Modifier.height(10.dp))
         val reviewGridState = rememberLazyGridState()
@@ -466,6 +491,7 @@ private const val AI_GATEWAY_PLUGIN_ID = "ai.rever.boss.plugin.dynamic.aigateway
 private const val FLUCK_AGENT_PLUGIN_ID = "ai.rever.boss.plugin.dynamic.fluckagent"
 
 @Composable
+@Suppress("LongMethod") // Declarative Compose layout.
 internal fun InstallingStepContent(
     progress: Float,
     status: String,
@@ -613,6 +639,7 @@ private fun ToolInstallRow(
 }
 
 @Composable
+@Suppress("LongMethod") // Declarative Compose layout.
 internal fun CompleteStepContent(
     installedCount: Int,
     failedPlugins: List<Pair<String, String>> = emptyList(),
@@ -625,6 +652,7 @@ internal fun CompleteStepContent(
     if (bossTermReady && onSetupBossTerm != null && onFinish != null) {
         BossTermOfferContent(
             installedCount = installedCount,
+            failedCount = failedPlugins.size,
             onSetupBossTerm = onSetupBossTerm,
             onFinish = onFinish,
         )
@@ -730,8 +758,10 @@ internal fun CompleteStepContent(
 }
 
 @Composable
+@Suppress("LongMethod") // Declarative Compose layout.
 private fun BossTermOfferContent(
     installedCount: Int,
+    failedCount: Int,
     onSetupBossTerm: () -> Unit,
     onFinish: () -> Unit,
 ) {
@@ -766,7 +796,12 @@ private fun BossTermOfferContent(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "$installedCount tools are ready. BOSS Term was installed with your workspace and has its own short setup.",
+            if (failedCount == 0) {
+                "$installedCount tools are ready. BOSS Term was installed with your workspace and has its own short setup."
+            } else {
+                "$installedCount tools are ready and $failedCount could not be installed. " +
+                    "You can retry those later from Toolbox. BOSS Term is ready for its own setup."
+            },
             fontSize = 13.sp,
             lineHeight = 20.sp,
             color = BossTheme.colors.textSecondary,
@@ -790,8 +825,17 @@ private fun BossTermOfferContent(
             }
             Spacer(Modifier.width(11.dp))
             Column {
-                Text("BOSS Term is installed", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = BossTheme.colors.textPrimary)
-                Text("Continue with shell and terminal preferences", fontSize = 9.sp, color = BossTheme.colors.textMuted)
+                Text(
+                    "BOSS Term is installed",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = BossTheme.colors.textPrimary,
+                )
+                Text(
+                    "Continue with shell and terminal preferences",
+                    fontSize = 9.sp,
+                    color = BossTheme.colors.textMuted,
+                )
             }
         }
         Spacer(Modifier.height(26.dp))
@@ -822,11 +866,16 @@ private fun BossTermOfferContent(
             }
         }
         Spacer(Modifier.height(18.dp))
-        Text("You can run BOSS Term setup later from its settings.", fontSize = 9.sp, color = BossTheme.colors.textMuted)
+        Text(
+            "You can run BOSS Term setup later from its settings.",
+            fontSize = 9.sp,
+            color = BossTheme.colors.textMuted,
+        )
     }
 }
 
 @Composable
+@Suppress("LongMethod") // Declarative Compose layout.
 internal fun WizardNavigation(
     currentStep: PluginInstallStep,
     selectedCount: Int,
@@ -870,7 +919,12 @@ internal fun WizardNavigation(
                     modifier = Modifier.height(40.dp),
                 ) {
                     Text(
-                        text = if (currentStep is PluginInstallStep.Review) "Install $selectedCount tools" else "Review selected tools",
+                        text =
+                            if (currentStep is PluginInstallStep.Review) {
+                                "Install $selectedCount tools"
+                            } else {
+                                "Review selected tools"
+                            },
                         fontWeight = FontWeight.Medium,
                     )
                 }
@@ -899,6 +953,7 @@ internal fun WizardNavigation(
 }
 
 @Composable
+@Suppress("LongMethod") // Declarative Compose layout.
 private fun PluginChoiceCard(
     plugin: WizardPluginInfo,
     selected: Boolean,
@@ -935,7 +990,11 @@ private fun PluginChoiceCard(
                 .size(17.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(if (selected) BossTheme.colors.signal else BossTheme.colors.panel)
-                .border(1.dp, if (selected) BossTheme.colors.signal else BossTheme.colors.lineStrong, RoundedCornerShape(4.dp)),
+                .border(
+                    1.dp,
+                    if (selected) BossTheme.colors.signal else BossTheme.colors.lineStrong,
+                    RoundedCornerShape(4.dp),
+                ),
             contentAlignment = Alignment.Center,
         ) {
             if (selected) Icon(Icons.Default.Check, "Selected", Modifier.size(12.dp), BossTheme.colors.onSignal)
@@ -955,7 +1014,13 @@ private fun PluginChoiceCard(
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(2.dp))
-            Text(plugin.description, fontSize = 9.sp, color = BossTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                plugin.description,
+                fontSize = 9.sp,
+                color = BossTheme.colors.textMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         Spacer(Modifier.width(8.dp))
         Text(

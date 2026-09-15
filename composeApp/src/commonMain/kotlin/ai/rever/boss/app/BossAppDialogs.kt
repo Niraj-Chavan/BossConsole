@@ -1133,12 +1133,19 @@ internal fun BossAppDialogs(state: BossAppState) {
                 logger.info(LogCategory.SYSTEM, "Plugin wizard completed")
             },
             onSetupBossTerm = {
-                coroutineScope.launch(Dispatchers.IO) {
-                    UserDataStorage.setPluginWizardCompleted(true)
+                if (TerminalAPIAccess.getProvider() == null) {
+                    StatusMessageManager.showMessage(
+                        "BOSS Term setup is unavailable. Update or reload Terminal Tab, then try again.",
+                    )
+                    logger.warn(LogCategory.SYSTEM, "BOSS Term setup requested without a Terminal Tab provider")
+                } else {
+                    coroutineScope.launch(Dispatchers.IO) {
+                        UserDataStorage.setPluginWizardCompleted(true)
+                    }
+                    state.showPluginInstallWizard = false
+                    state.showTerminalOnboardingWizard = true
+                    logger.info(LogCategory.SYSTEM, "Plugin wizard completed; opening BOSS Term setup")
                 }
-                state.showPluginInstallWizard = false
-                state.showTerminalOnboardingWizard = true
-                logger.info(LogCategory.SYSTEM, "Plugin wizard completed; opening BOSS Term setup")
             },
             onInstallPlugins = { plugins, onProgress ->
                 when {

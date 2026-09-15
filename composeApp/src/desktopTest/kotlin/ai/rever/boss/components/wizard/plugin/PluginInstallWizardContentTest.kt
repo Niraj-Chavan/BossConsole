@@ -21,10 +21,43 @@ import androidx.compose.ui.unit.dp
 import org.junit.Rule
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class PluginInstallWizardContentTest {
     @get:Rule
     val rule = createComposeRule()
+
+    @Test
+    fun `terminal setup remains offered when another selected tool fails`() {
+        assertTrue(
+            canOfferTerminalSetup(
+                installedPluginIds = listOf("ai.rever.boss.plugin.dynamic.terminaltab"),
+                failedPlugins = listOf("optional-tool" to "Download failed"),
+            ),
+        )
+    }
+
+    @Test
+    fun `terminal setup is offered when terminal was already installed outside this batch`() {
+        assertTrue(
+            canOfferTerminalSetup(
+                terminalAlreadyInstalled = true,
+                installedPluginIds = emptyList(),
+                failedPlugins = emptyList(),
+            ),
+        )
+    }
+
+    @Test
+    fun `terminal setup is not offered when terminal tab itself fails`() {
+        assertFalse(
+            canOfferTerminalSetup(
+                installedPluginIds = listOf("ai.rever.boss.plugin.dynamic.terminaltab"),
+                failedPlugins = listOf("ai.rever.boss.plugin.dynamic.terminaltab" to "Load failed"),
+            ),
+        )
+    }
 
     @Test
     fun `all failed installs are explained without claiming no selection`() {
@@ -79,6 +112,22 @@ class PluginInstallWizardContentTest {
             assertEquals(1, setupRequests)
             assertEquals(1, finishRequests)
         }
+    }
+
+    @Test
+    fun `terminal setup offer keeps unrelated install failures visible`() {
+        rule.setContent {
+            CompleteStepContent(
+                installedCount = 4,
+                failedPlugins = listOf("optional-tool" to "Download failed"),
+                bossTermReady = true,
+                onSetupBossTerm = {},
+                onFinish = {},
+            )
+        }
+
+        rule.onNodeWithText("4 tools are ready and 1 could not be installed.", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Set up BOSS Term").assertIsDisplayed()
     }
 
     @Test

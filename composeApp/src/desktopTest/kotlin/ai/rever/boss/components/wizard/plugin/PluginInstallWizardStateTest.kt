@@ -78,6 +78,7 @@ class PluginInstallWizardStateTest {
     @Test
     fun `mandatory plugin cannot be deselected`() {
         val state = state()
+        state.applyProfile(ToolboxProfile.GENERAL)
 
         state.setPluginSelected(mandatoryPlugin.id, false)
         assertTrue(state.isPluginSelected(mandatoryPlugin.id))

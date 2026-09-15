@@ -46,6 +46,9 @@ object PluginListProvider {
             "ai.rever.boss.plugin.dynamic.console",
             "ai.rever.boss.plugin.dynamic.fluckagent",
             "ai.rever.boss.plugin.dynamic.aigateway",
+            // Codebase now contains the Git Status and Git Log features. Keep the replacement in
+            // every fresh setup because startup retires those two standalone plugins.
+            "ai.rever.boss.plugin.dynamic.codebase",
             // Was `usersecretlist` ("My Secrets") until that plugin was retired into
             // secret-manager's "Shared with me" section. Installing the read-only half by
             // default and never the half that can add a key was backwards anyway: AI provider

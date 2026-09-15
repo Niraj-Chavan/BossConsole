@@ -5,6 +5,7 @@ import ai.rever.boss.components.bars.ChromeBar
 import ai.rever.boss.components.bars.displayName
 import ai.rever.boss.components.bars.isBarVisible
 import ai.rever.boss.components.bars.withBarVisible
+import ai.rever.boss.components.bars.horizontal.StatusMessageManager
 import ai.rever.boss.components.dialogs.CLIInstallationDialog
 import ai.rever.boss.components.dialogs.ImportDataDialog
 import ai.rever.boss.components.settings.sidebar.SettingsSection
@@ -974,7 +975,15 @@ fun ApplicationScope.BossWindow(
                 Item(
                     "Welcome Wizard...",
                     onClick = {
-                        showWelcomeWizard = true
+                        requestTerminalWelcomeWizard(
+                            providerAvailable = TerminalAPIAccess.getProvider() != null,
+                            onOpen = { showWelcomeWizard = true },
+                            onUnavailable = {
+                                StatusMessageManager.showMessage(
+                                    "BOSS Term setup is unavailable. Update or reload Terminal Tab, then try again.",
+                                )
+                            },
+                        )
                     },
                 )
 
@@ -1424,6 +1433,15 @@ fun ApplicationScope.BossWindow(
             }
         }
     }
+}
+
+internal fun requestTerminalWelcomeWizard(
+    providerAvailable: Boolean,
+    onOpen: () -> Unit,
+    onUnavailable: () -> Unit,
+): Boolean {
+    if (providerAvailable) onOpen() else onUnavailable()
+    return providerAvailable
 }
 
 /**

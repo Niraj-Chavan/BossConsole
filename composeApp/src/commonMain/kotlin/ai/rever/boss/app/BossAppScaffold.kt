@@ -3,6 +3,7 @@ package ai.rever.boss.app
 import ai.rever.boss.components.bars.horizontal.BossBottomBar
 import ai.rever.boss.components.bars.horizontal.BossTitleBar
 import ai.rever.boss.components.bars.horizontal.BossTopBar
+import ai.rever.boss.components.bars.horizontal.setupKeepsBottomBarVisible
 import ai.rever.boss.components.bars.isBarVisible
 import ai.rever.boss.components.bars.vertical.BossLeftSideBar
 import ai.rever.boss.components.bars.vertical.BossRightSideBar
@@ -260,6 +261,7 @@ internal fun BossAppScaffold(
     appearance: WindowAppearanceSettings,
     onToggleMaximize: (() -> Unit)?,
 ) {
+    val setupNeedsBottomBar = setupKeepsBottomBarVisible()
     val coroutineScope = state.coroutineScope
     val splitViewState = state.splitViewState
     val selectedProject by state.windowProjectState.selectedProject.collectAsState()
@@ -882,9 +884,9 @@ internal fun BossAppScaffold(
                     }
                 }
 
-                // Bottom bar - hidden in focus mode with smooth expand/shrink animation
+                // Setup retains a visible home and its reopened dialog, including in focus mode.
                 AnimatedVisibility(
-                    visible = appearance.showBottomBar && reveal.showBottomBar,
+                    visible = setupNeedsBottomBar || (appearance.showBottomBar && reveal.showBottomBar),
                     enter =
                         expandVertically(
                             expandFrom = Alignment.Bottom,
