@@ -66,6 +66,19 @@ class FluckReviewCompatibilityBridgeTest {
     }
 
     @Test
+    fun `malformed terminal id is refused using its bounded correlation value`() {
+        val route =
+            event(terminalId = "terminal id with spaces")
+                .routeSetupFluckOpenRequest("window-1", 1_000)
+
+        assertTrue(route is SetupFluckOpenRoute.Reject)
+        assertEquals("missing or malformed terminal id", route.reason)
+        assertEquals("request-1", route.requestId)
+        assertEquals("terminal id with spaces", route.terminalId)
+        assertTrue(route.canAcknowledge)
+    }
+
+    @Test
     fun `integer expiry is accepted without weakening exact numeric validation`() {
         val route = event(expiresAtMs = 2_000).routeSetupFluckOpenRequest("window-1", 1_000)
 
@@ -131,6 +144,7 @@ class FluckReviewCompatibilityBridgeTest {
         windowId: String = "window-1",
         expiresAtMs: Any = 2_000L,
         prompt: String = "Inspect this setup terminal",
+        terminalId: String = "terminal-1",
     ): CustomPluginEvent =
         CustomPluginEvent(
             sourcePluginId = source,
@@ -139,7 +153,7 @@ class FluckReviewCompatibilityBridgeTest {
                 mapOf(
                     "windowId" to windowId,
                     "requestId" to "request-1",
-                    "terminalId" to "terminal-1",
+                    "terminalId" to terminalId,
                     "expiresAtMs" to expiresAtMs,
                     "prompt" to prompt,
                 ),

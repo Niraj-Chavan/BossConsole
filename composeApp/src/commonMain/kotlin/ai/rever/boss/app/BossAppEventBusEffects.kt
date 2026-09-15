@@ -20,6 +20,7 @@ import ai.rever.boss.components.plugin.MissingHandlerPluginEventBus
 import ai.rever.boss.components.plugin.PanelIds
 import ai.rever.boss.components.plugin.PluginDependencyEventBus
 import ai.rever.boss.components.plugin.claimMissingDependencyForWindow
+import ai.rever.boss.components.plugin.providers.createApplicationEventBus
 import ai.rever.boss.components.plugin.resolveRegisteredPanelId
 import ai.rever.boss.components.window_panel.SplitViewState
 import ai.rever.boss.components.workspaces.WorkspaceSerializer
@@ -32,7 +33,6 @@ import ai.rever.boss.html.HtmlFileOpenMode
 import ai.rever.boss.html.HtmlFileSettingsManager
 import ai.rever.boss.mcp.McpToolRegistryImpl
 import ai.rever.boss.mcp.consumeApprovals
-import ai.rever.boss.plugin.api.ApplicationEventBusRegistry
 import ai.rever.boss.plugin.api.CustomPluginEvent
 import ai.rever.boss.plugin.api.NewTabContext
 import ai.rever.boss.plugin.api.Panel.Companion.bottom
@@ -105,7 +105,9 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
     // below is self-declared, not authenticated; the application bus is not a trust boundary.
     // Install-time plugin selection and the live request token are the actual gates.
     LaunchedEffect(windowId, state.panelRegistry) {
-        val bus = ApplicationEventBusRegistry.bus ?: return@LaunchedEffect
+        // Create the host singleton here instead of waiting for a plugin to access its lazy bus.
+        // Returning on a cold start would leave this stable-key effect dead for the window's life.
+        val bus = createApplicationEventBus(this)
         val delivered = DeliveredSetupRequestLedger()
         bus.eventsOfType(CustomPluginEvent::class.java).collect { event ->
             isolateSetupBridgeEvent(
@@ -184,21 +186,27 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
                         val accepted =
                             fluckPanel != null &&
                                 classification != DeliveredSetupRequestLedger.Classification.CONFLICT
-                        if (accepted && classification == DeliveredSetupRequestLedger.Classification.NEW) {
-                            // Released Fluck has a process-wide inbox. This acknowledgement means
-                            // the host published the request; it cannot prove the model received it.
-                            delivered.deliverAndRecord(request) {
-                                bus.publish(
-                                    CustomPluginEvent(
-                                        CODEBASE_PLUGIN_ID,
-                                        FLUCK_REVIEW_EVENT,
-                                        mapOf("prompt" to request.prompt, "projectPath" to "", "autoStart" to true),
-                                    ),
-                                )
-                            }
-                        }
                         if (accepted) {
+                            // Open first so an open-panel failure cannot follow a successful
+                            // auto-start publish and then incorrectly acknowledge that request as rejected.
                             PanelEventBus.openPanel(requireNotNull(fluckPanel), sourceWindowId = windowId)
+                            if (classification == DeliveredSetupRequestLedger.Classification.NEW) {
+                                // Released Fluck has a process-wide inbox. This acknowledgement means
+                                // the host published the request; it cannot prove the model received it.
+                                delivered.deliverAndRecord(request) {
+                                    bus.publish(
+                                        CustomPluginEvent(
+                                            CODEBASE_PLUGIN_ID,
+                                            FLUCK_REVIEW_EVENT,
+                                            mapOf(
+                                                "prompt" to request.prompt,
+                                                "projectPath" to "",
+                                                "autoStart" to true,
+                                            ),
+                                        ),
+                                    )
+                                }
+                            }
                         }
                         bus.publish(
                             setupDebugAcknowledgement(

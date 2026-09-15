@@ -13,6 +13,7 @@ internal const val SETUP_FLUCK_PROBE_EVENT = "bossterm.setup.fluck.probe"
 internal const val SETUP_FLUCK_AVAILABILITY_EVENT = "bossterm.setup.fluck.availability"
 internal const val SETUP_OPEN_EVENT = "bossterm.setup.open"
 
+/** A debugging attempt must use a fresh [requestId]; reusing one with different data is rejected. */
 internal data class SetupFluckOpenRequest(
     val requestId: String,
     val terminalId: String,
@@ -126,8 +127,11 @@ internal fun CustomPluginEvent.routeSetupFluckOpenRequest(
     val prompt = payload["prompt"] as? String
     val safeRequestId = requestId?.takeIf(::validOpaqueId)
     val safeTerminalId = terminalId?.takeIf(::validOpaqueId)
+    // A rejected request may echo a bounded terminal id so Terminal Tab can match the refusal.
+    // Successful routing still requires the stricter opaque-id character set above.
+    val acknowledgementTerminalId = terminalId?.takeIf { it.length in 1..MAX_ID_LENGTH }
 
-    fun reject(reason: String) = SetupFluckOpenRoute.Reject(reason, safeRequestId, safeTerminalId)
+    fun reject(reason: String) = SetupFluckOpenRoute.Reject(reason, safeRequestId, acknowledgementTerminalId)
     val expiresAtMs = exactLong(payload["expiresAtMs"])
     val rejection =
         when {

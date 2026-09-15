@@ -1194,21 +1194,19 @@ internal fun BossAppDialogs(state: BossAppState) {
 
     if (state.terminalOnboardingOwnerStarted) {
         val requestGeneration = state.terminalOnboardingRequestGeneration
+        val finishTerminalOnboarding: () -> Unit =
+            remember(requestGeneration) {
+                {
+                    state.terminalOnboardingOwnerStarted = false
+                    state.focusRequester.requestFocus()
+                }
+            }
         // Terminal Tab observes this memoized callback identity as the explicit foreground
         // generation. Its process-wide renderer ownership guard keeps another host window from
         // mounting the same setup PTY.
         TerminalAPIAccess.TerminalOnboardingWizard(
-            onDismiss =
-                remember(requestGeneration) {
-                    {
-                        state.terminalOnboardingOwnerStarted = false
-                        state.focusRequester.requestFocus()
-                    }
-                },
-            onComplete = {
-                state.terminalOnboardingOwnerStarted = false
-                state.focusRequester.requestFocus()
-            },
+            onDismiss = finishTerminalOnboarding,
+            onComplete = finishTerminalOnboarding,
         )
     }
 
