@@ -117,11 +117,13 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.awt.GraphicsEnvironment
 import java.awt.Window
+import java.lang.ref.WeakReference
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import javax.swing.JFrame
@@ -263,6 +265,34 @@ internal fun ContextMenuTarget.toContextMenuInfo(
     )
 }
 
+/** Per-handle authority; navigation or callback replacement revokes previously issued tokens. */
+internal class BrowserMenuContextAuthority {
+    private val generation = AtomicLong()
+
+    fun invalidate() {
+        generation.incrementAndGet()
+    }
+
+    fun snapshot(): Long = generation.get()
+
+    fun capture(
+        frame: Frame?,
+        capturedGeneration: Long = snapshot(),
+    ): BrowserMenuContext = BrowserMenuContextImpl(WeakReference(frame), this, capturedGeneration)
+
+    fun resolve(context: BrowserMenuContext): Frame? {
+        val token = context as? BrowserMenuContextImpl ?: return null
+        val frame = token.frameRef.get()
+        return frame.takeIf { token.owner === this && token.generation == generation.get() }
+    }
+}
+
+private class BrowserMenuContextImpl(
+    val frameRef: WeakReference<Frame>,
+    val owner: BrowserMenuContextAuthority,
+    val generation: Long,
+) : BrowserMenuContext
+
 /**
  * Desktop implementation of [BrowserHandle] that wraps a JxBrowser [Browser] instance.
  *
@@ -270,11 +300,6 @@ internal fun ContextMenuTarget.toContextMenuInfo(
  * @param config The configuration used to create this browser
  * @param engineGeneration The engine generation at the time this browser was created
  */
-
-internal class BrowserMenuContextImpl(
-    val frameRef: java.lang.ref.WeakReference<com.teamdev.jxbrowser.frame.Frame>,
-) : BrowserMenuContext
-
 internal class BrowserHandleImpl(
     private val browser: Browser,
     private val config: BrowserConfig,
@@ -379,6 +404,7 @@ internal class BrowserHandleImpl(
     /** Receives committed two-finger swipes from the page. See [BrowserSwipeNavScript]. */
     private val swipeNavBridge = BrowserSwipeNavBridge(onNavigate = ::onSwipeNavigate)
 
+    private val menuContextAuthority = BrowserMenuContextAuthority()
     private val disposed = AtomicBoolean(false)
 
     /**
@@ -1212,6 +1238,8 @@ internal class BrowserHandleImpl(
         // Navigation started - track loading state
         subscriptions +=
             browser.navigation().on(NavigationStarted::class.java) { _ ->
+                // Any frame navigation revokes menu tokens, including same-document transitions.
+                menuContextAuthority.invalidate()
                 _isLoading = true
                 loadingListeners.forEach { listener ->
                     try {
@@ -1481,6 +1509,7 @@ internal class BrowserHandleImpl(
         // Browser closed
         subscriptions +=
             browser.on(BrowserClosed::class.java) {
+                menuContextAuthority.invalidate()
                 logger.debug(LogCategory.BROWSER, "Browser closed", mapOf("handleId" to id))
                 // A browser can close without a dispose() call (a crashed renderer, an engine recycle).
                 // Call dispose() to ensure all scopes are cancelled and the handle is unregistered.
@@ -1676,8 +1705,11 @@ internal class BrowserHandleImpl(
                 // hurts as much as throwing and a try/catch only covers the latter.
                 val read =
                     try {
+                        // Snapshot before reading native params so concurrent revocation cannot
+                        // grant an old frame a new generation. Missing frames retain an invalid token.
+                        val menuGeneration = menuContextAuthority.snapshot()
                         val frame = params.frame().orElse(null)
-                        val menuContext = frame?.let { BrowserMenuContextImpl(java.lang.ref.WeakReference(it)) }
+                        val menuContext = menuContextAuthority.capture(frame, menuGeneration)
                         val target =
                             ContextMenuTarget(
                                 contentTypes = params.contentTypes(),
@@ -2776,6 +2808,7 @@ internal class BrowserHandleImpl(
     // ============================================================
 
     override fun setContextMenuCallback(callback: ContextMenuCallback?) {
+        menuContextAuthority.invalidate()
         contextMenuCallback = callback
     }
 
@@ -3595,16 +3628,32 @@ internal class BrowserHandleImpl(
     // CLIPBOARD OPERATIONS
     // ============================================================
 
+    override fun copySelection() {
+        editorCommand(EditorCommand.copy())
+    }
+
     override fun copySelection(menuContext: BrowserMenuContext?) {
         editorCommand(EditorCommand.copy(), menuContext)
+    }
+
+    override fun paste() {
+        editorCommand(EditorCommand.paste())
     }
 
     override fun paste(menuContext: BrowserMenuContext?) {
         editorCommand(EditorCommand.paste(), menuContext)
     }
 
+    override fun cut() {
+        editorCommand(EditorCommand.cut())
+    }
+
     override fun cut(menuContext: BrowserMenuContext?) {
         editorCommand(EditorCommand.cut(), menuContext)
+    }
+
+    override fun selectAll() {
+        editorCommand(EditorCommand.selectAll())
     }
 
     override fun selectAll(menuContext: BrowserMenuContext?) {
@@ -3657,8 +3706,9 @@ internal class BrowserHandleImpl(
             try {
                 executeEditorCommand(
                     menuContext = menuContext,
-                    focusedFrame = browser.focusedFrame().orElse(null),
-                    mainFrame = browser.mainFrame().orElse(null),
+                    focusedFrame = if (menuContext == null) browser.focusedFrame().orElse(null) else null,
+                    mainFrame = if (menuContext == null) browser.mainFrame().orElse(null) else null,
+                    authority = menuContextAuthority,
                     command = command,
                 )
             } catch (e: Exception) {
@@ -4188,6 +4238,7 @@ internal class BrowserHandleImpl(
     }
 
     override fun dispose() {
+        menuContextAuthority.invalidate()
         audioSource.close()
         // Synchronously, and before the guard below: invokeLater would let browser.close() run
         // first, and closing the browser under a still-attached Swing view is exactly the
@@ -4539,19 +4590,21 @@ internal fun shouldRetainSurface(mode: com.teamdev.jxbrowser.engine.RenderingMod
  * iframe copied and pasted nothing. [focusedFrame] is where the caret is; [mainFrame] is the
  * fallback for the case Chromium reports no focused frame at all.
  *
- * Pure and separate from [BrowserHandleImpl] so that choice is pinned by a test instead of
- * needing a live engine to observe. Exception containment stays at the call site, which owns
- * the logger.
+ * Explicit menu tokens must belong to this authority and its current generation; invalid
+ * tokens never fall back to focus. Native frame closure is checked by Frame.execute, and
+ * its exception is contained by the caller. Navigation racing an already admitted native
+ * command remains subject to JxBrowser frame lifetime; this is not a document-atomic RPC.
  */
 internal fun executeEditorCommand(
     menuContext: BrowserMenuContext?,
     focusedFrame: Frame?,
     mainFrame: Frame?,
     command: EditorCommand,
+    authority: BrowserMenuContextAuthority,
 ): Boolean {
     val frame =
         if (menuContext != null) {
-            (menuContext as? BrowserMenuContextImpl)?.frameRef?.get()
+            authority.resolve(menuContext)
         } else {
             focusedFrame ?: mainFrame
         }

@@ -62,9 +62,43 @@ data class BrowserContextMenuInfo(
     val pageTitle: String = "",
     /** Form field info if right-clicked on a form field (for secret auto-fill) */
     val formFieldInfo: FormFieldInfo? = null,
-    /** Menu context token, used to route editor commands to the exact clicked frame */
-    val menuContext: BrowserMenuContext? = null,
-)
+) {
+    /**
+     * Frame/document token for this menu. Kept outside the primary constructor to preserve
+     * the published constructor, copy and component signatures. A copy intentionally drops
+     * this transient token; equality compares menu contents, not frame identity.
+     * Consumers need the API version introducing BrowserMenuContext; host-pinned members
+     * additionally require a minBossVersion that includes this contract.
+     */
+    var menuContext: BrowserMenuContext? = null
+        private set
+
+    /** Construct a menu with an explicit token without changing the legacy data-class ABI. */
+    constructor(
+        linkUrl: String? = null,
+        selectedText: String? = null,
+        isEditable: Boolean = false,
+        hasVideo: Boolean = false,
+        hasImage: Boolean = false,
+        imageUrl: String? = null,
+        pageUrl: String = "",
+        pageTitle: String = "",
+        formFieldInfo: FormFieldInfo? = null,
+        menuContext: BrowserMenuContext?,
+    ) : this(
+        linkUrl,
+        selectedText,
+        isEditable,
+        hasVideo,
+        hasImage,
+        imageUrl,
+        pageUrl,
+        pageTitle,
+        formFieldInfo,
+    ) {
+        this.menuContext = menuContext
+    }
+}
 
 /**
  * Callback for handling context menu requests from the browser.
@@ -543,33 +577,72 @@ interface BrowserHandle {
     /**
      * Copy the currently selected text to the clipboard.
      *
-     * @param menuContext When supplied (from [BrowserContextMenuInfo.menuContext]), the command
-     *   targets the exact frame the user right-clicked on. When `null`, the command uses ordinary
-     *   focused-frame / main-frame resolution. A menu context is NOT global state and does not
-     *   affect later ordinary commands.
+     * The context-aware overload accepts [BrowserContextMenuInfo.menuContext] to target the
+     * exact frame the user right-clicked on. A null token uses ordinary focused-frame /
+     * main-frame resolution. A menu context must not affect later ordinary commands.
      */
-    fun copySelection(menuContext: BrowserMenuContext? = null)
+    fun copySelection()
+
+    /**
+     * Context-aware overload. The default supports ordinary commands only; an explicit token
+     * is a no-op on older implementations, never a fallback into the wrong frame. Implementors
+     * must reject stale, foreign or navigated-document tokens and must not retain ambient context.
+     * BrowserHandle is host-implemented: callers must gate this member with minBossVersion.
+     */
+    fun copySelection(menuContext: BrowserMenuContext?) {
+        if (menuContext == null) copySelection()
+    }
 
     /**
      * Paste text from the clipboard at the current cursor position.
      *
-     * @param menuContext See [copySelection].
+     * See the context-aware [copySelection] overload for token routing.
      */
-    fun paste(menuContext: BrowserMenuContext? = null)
+    fun paste()
+
+    /**
+     * Context-aware overload. The default supports ordinary commands only; an explicit token
+     * is a no-op on older implementations, never a fallback into the wrong frame. Implementors
+     * must reject stale, foreign or navigated-document tokens and must not retain ambient context.
+     * BrowserHandle is host-implemented: callers must gate this member with minBossVersion.
+     */
+    fun paste(menuContext: BrowserMenuContext?) {
+        if (menuContext == null) paste()
+    }
 
     /**
      * Cut the currently selected text to the clipboard.
      *
-     * @param menuContext See [copySelection].
+     * See the context-aware [copySelection] overload for token routing.
      */
-    fun cut(menuContext: BrowserMenuContext? = null)
+    fun cut()
+
+    /**
+     * Context-aware overload. The default supports ordinary commands only; an explicit token
+     * is a no-op on older implementations, never a fallback into the wrong frame. Implementors
+     * must reject stale, foreign or navigated-document tokens and must not retain ambient context.
+     * BrowserHandle is host-implemented: callers must gate this member with minBossVersion.
+     */
+    fun cut(menuContext: BrowserMenuContext?) {
+        if (menuContext == null) cut()
+    }
 
     /**
      * Select all text on the page.
      *
-     * @param menuContext See [copySelection].
+     * See the context-aware [copySelection] overload for token routing.
      */
-    fun selectAll(menuContext: BrowserMenuContext? = null)
+    fun selectAll()
+
+    /**
+     * Context-aware overload. The default supports ordinary commands only; an explicit token
+     * is a no-op on older implementations, never a fallback into the wrong frame. Implementors
+     * must reject stale, foreign or navigated-document tokens and must not retain ambient context.
+     * BrowserHandle is host-implemented: callers must gate this member with minBossVersion.
+     */
+    fun selectAll(menuContext: BrowserMenuContext?) {
+        if (menuContext == null) selectAll()
+    }
 
     // ============================================================
     // POPUP AND NEW TAB HANDLING
