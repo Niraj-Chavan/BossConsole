@@ -901,7 +901,7 @@ internal fun BossAppScaffold(
 
                 // Setup retains a visible home and its reopened dialog, including in focus mode.
                 AnimatedVisibility(
-                    visible = setupNeedsBottomBar || (appearance.showBottomBar && reveal.showBottomBar),
+                    visible = shouldShowBottomBar(setupNeedsBottomBar, appearance.showBottomBar, reveal.showBottomBar),
                     enter =
                         expandVertically(
                             expandFrom = Alignment.Bottom,
@@ -951,6 +951,12 @@ internal fun BossAppScaffold(
         }
     }
 }
+
+private fun shouldShowBottomBar(
+    setupNeedsBottomBar: Boolean,
+    configuredVisible: Boolean,
+    focusModeRevealed: Boolean,
+): Boolean = setupNeedsBottomBar || (configuredVisible && focusModeRevealed)
 
 /**
  * Which plugin panel column takes the host's actions, or null when the right one is shut.

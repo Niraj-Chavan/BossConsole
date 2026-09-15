@@ -797,7 +797,8 @@ private fun BossTermOfferContent(
         Spacer(Modifier.height(8.dp))
         Text(
             if (failedCount == 0) {
-                "$installedCount tools are ready. BOSS Term was installed with your workspace and has its own short setup."
+                "$installedCount tools are ready. BOSS Term was installed with your workspace " +
+                    "and has its own short setup."
             } else {
                 "$installedCount tools are ready and $failedCount could not be installed. " +
                     "You can retry those later from Toolbox. BOSS Term is ready for its own setup."
