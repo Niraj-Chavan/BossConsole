@@ -32,11 +32,14 @@ import ai.rever.boss.html.HtmlFileOpenMode
 import ai.rever.boss.html.HtmlFileSettingsManager
 import ai.rever.boss.mcp.McpToolRegistryImpl
 import ai.rever.boss.mcp.consumeApprovals
+import ai.rever.boss.plugin.api.ApplicationEventBusRegistry
+import ai.rever.boss.plugin.api.CustomPluginEvent
 import ai.rever.boss.plugin.api.NewTabContext
 import ai.rever.boss.plugin.api.Panel.Companion.bottom
 import ai.rever.boss.plugin.api.Panel.Companion.left
 import ai.rever.boss.plugin.api.Panel.Companion.right
 import ai.rever.boss.plugin.api.Panel.Companion.top
+import ai.rever.boss.plugin.api.PanelId
 import ai.rever.boss.plugin.api.PanelInfo
 import ai.rever.boss.plugin.api.TabTypeInfo
 import ai.rever.boss.plugin.tab.terminal.TerminalTabInfo
@@ -96,6 +99,65 @@ internal fun BossAppEventBusEffects(state: BossAppState) {
     val logger = state.logger
     val splitViewState = state.splitViewState
     val windowProjectState = state.windowProjectState
+
+    // Fluck 1.0.110 intentionally accepts Agent Review only from the codebase plugin. Keep the
+    // compatibility translation in the trusted host: terminal-tab identifies itself here, and
+    // never gets to impersonate codebase or address another window directly.
+    LaunchedEffect(windowId, state.panelRegistry) {
+        val bus = ApplicationEventBusRegistry.bus ?: return@LaunchedEffect
+        val delivered = mutableSetOf<String>()
+        bus.eventsOfType(CustomPluginEvent::class.java).collect { event ->
+            if (event.isSetupOpenRequest(windowId)) {
+                state.terminalOnboardingOwnerStarted = true
+                state.showTerminalOnboardingWizard = true
+                state.terminalOnboardingRequestGeneration++
+                return@collect
+            }
+            val probeRequestId = event.toSetupFluckProbeRequest(windowId)
+            if (probeRequestId != null) {
+                bus.publish(
+                    CustomPluginEvent(
+                        HOST_PLUGIN_ID,
+                        SETUP_FLUCK_AVAILABILITY_EVENT,
+                        mapOf(
+                            "requestId" to probeRequestId,
+                            "available" to (state.panelRegistry.resolveRegisteredPanelId(PanelId("atlas", 16)) != null),
+                        ),
+                    ),
+                )
+                return@collect
+            }
+            val request = event.toSetupFluckOpenRequest(windowId) ?: return@collect
+            val fluckPanel = state.panelRegistry.resolveRegisteredPanelId(PanelId("atlas", 16))
+            val accepted = fluckPanel != null && delivered.add(request.requestId)
+            if (accepted) {
+                bus.publish(
+                    CustomPluginEvent(
+                        CODEBASE_PLUGIN_ID,
+                        FLUCK_REVIEW_EVENT,
+                        mapOf(
+                            "prompt" to request.prompt,
+                            "projectPath" to "",
+                            "autoStart" to true,
+                        ),
+                    ),
+                )
+                PanelEventBus.openPanel(requireNotNull(fluckPanel), sourceWindowId = windowId)
+            }
+            bus.publish(
+                CustomPluginEvent(
+                    HOST_PLUGIN_ID,
+                    SETUP_DEBUG_OPENED_EVENT,
+                    mapOf(
+                        "requestId" to request.requestId,
+                        "terminalId" to request.terminalId,
+                        "accepted" to accepted,
+                        "error" to if (accepted) null else "Fluck is unavailable",
+                    ),
+                ),
+            )
+        }
+    }
 
     // Listen for file open events - now handled by split state
     // Issue #506: Filter by window to prevent file opening in all windows

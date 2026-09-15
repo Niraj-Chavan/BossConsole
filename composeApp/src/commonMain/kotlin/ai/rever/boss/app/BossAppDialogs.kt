@@ -90,6 +90,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -1160,6 +1161,8 @@ internal fun BossAppDialogs(state: BossAppState) {
                     }
                     state.showPluginInstallWizard = false
                     state.showTerminalOnboardingWizard = true
+                    state.terminalOnboardingOwnerStarted = true
+                    state.terminalOnboardingRequestGeneration++
                     logger.info(LogCategory.SYSTEM, "Plugin wizard completed; opening BOSS Term setup")
                 }
             },
@@ -1190,14 +1193,20 @@ internal fun BossAppDialogs(state: BossAppState) {
         )
     }
 
-    if (state.showTerminalOnboardingWizard) {
+    if (state.terminalOnboardingOwnerStarted) {
+        val requestGeneration = state.terminalOnboardingRequestGeneration
         TerminalAPIAccess.TerminalOnboardingWizard(
-            onDismiss = {
-                state.showTerminalOnboardingWizard = false
-                state.focusRequester.requestFocus()
-            },
+            onDismiss =
+                remember(requestGeneration) {
+                    {
+                        state.showTerminalOnboardingWizard = false
+                        state.terminalOnboardingOwnerStarted = false
+                        state.focusRequester.requestFocus()
+                    }
+                },
             onComplete = {
                 state.showTerminalOnboardingWizard = false
+                state.terminalOnboardingOwnerStarted = false
                 state.focusRequester.requestFocus()
             },
         )

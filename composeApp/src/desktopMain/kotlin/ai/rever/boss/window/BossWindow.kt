@@ -306,9 +306,6 @@ fun ApplicationScope.BossWindow(
         var showResetTerminalDialog by remember { mutableStateOf(false) }
         var resetTerminalResult by remember { mutableStateOf<Boolean?>(null) }
 
-        // State for Welcome Wizard dialog
-        var showWelcomeWizard by remember { mutableStateOf(false) }
-
         // State for the password/bookmark import dialog
         var showImportDialog by remember { mutableStateOf(false) }
 
@@ -981,7 +978,7 @@ fun ApplicationScope.BossWindow(
                     onClick = {
                         requestTerminalWelcomeWizard(
                             providerAvailable = TerminalAPIAccess.getProvider() != null,
-                            onOpen = { showWelcomeWizard = true },
+                            onOpen = { MenuActionsHandler.triggerShowTerminalOnboarding(windowState.id) },
                             onUnavailable = {
                                 StatusMessageManager.showMessage(
                                     "BOSS Term setup is unavailable. Update or reload Terminal Tab, then try again.",
@@ -1396,14 +1393,6 @@ fun ApplicationScope.BossWindow(
                             }
                         }
                     },
-                )
-            }
-
-            // Welcome Wizard Dialog
-            if (showWelcomeWizard) {
-                TerminalAPIAccess.TerminalOnboardingWizard(
-                    onDismiss = { showWelcomeWizard = false },
-                    onComplete = { showWelcomeWizard = false },
                 )
             }
 
