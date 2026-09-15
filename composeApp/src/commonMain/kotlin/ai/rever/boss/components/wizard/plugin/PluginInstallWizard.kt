@@ -652,7 +652,7 @@ internal fun CompleteStepContent(
     if (bossTermReady && onSetupBossTerm != null && onFinish != null) {
         BossTermOfferContent(
             installedCount = installedCount,
-            failedCount = failedPlugins.size,
+            failedPlugins = failedPlugins,
             onSetupBossTerm = onSetupBossTerm,
             onFinish = onFinish,
         )
@@ -716,21 +716,7 @@ internal fun CompleteStepContent(
                         color = BossTheme.colors.warn,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Column(
-                        modifier =
-                            Modifier
-                                .heightIn(max = 120.dp)
-                                .verticalScroll(rememberScrollState()),
-                    ) {
-                        failedPlugins.forEach { (pluginId, error) ->
-                            Text(
-                                text = "\u2022 $pluginId: $error",
-                                fontSize = 12.sp,
-                                color = BossTheme.colors.textSecondary,
-                                lineHeight = 18.sp,
-                            )
-                        }
-                    }
+                    FailedPluginDetails(failedPlugins)
                 }
             }
 
@@ -758,13 +744,28 @@ internal fun CompleteStepContent(
 }
 
 @Composable
+private fun FailedPluginDetails(failedPlugins: List<Pair<String, String>>) {
+    Column(Modifier.heightIn(max = 120.dp).verticalScroll(rememberScrollState())) {
+        failedPlugins.forEach { (pluginId, error) ->
+            Text(
+                text = "\u2022 $pluginId: $error",
+                fontSize = 12.sp,
+                color = BossTheme.colors.textSecondary,
+                lineHeight = 18.sp,
+            )
+        }
+    }
+}
+
+@Composable
 @Suppress("LongMethod") // Declarative Compose layout.
 private fun BossTermOfferContent(
     installedCount: Int,
-    failedCount: Int,
+    failedPlugins: List<Pair<String, String>>,
     onSetupBossTerm: () -> Unit,
     onFinish: () -> Unit,
 ) {
+    val failedCount = failedPlugins.size
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.Center,
@@ -808,6 +809,10 @@ private fun BossTermOfferContent(
             color = BossTheme.colors.textSecondary,
             modifier = Modifier.fillMaxWidth(0.78f),
         )
+        if (failedPlugins.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            FailedPluginDetails(failedPlugins)
+        }
         Spacer(Modifier.height(22.dp))
         Row(
             Modifier

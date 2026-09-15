@@ -127,6 +127,7 @@ class PluginInstallWizardContentTest {
         }
 
         rule.onNodeWithText("4 tools are ready and 1 could not be installed.", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("optional-tool: Download failed", substring = true).assertIsDisplayed()
         rule.onNodeWithText("Set up BOSS Term").assertIsDisplayed()
     }
 
