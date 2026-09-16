@@ -44,6 +44,9 @@ summary job. The version prerequisite took 5-8 seconds plus 1-3 seconds of queue
   consuming two five-job matrices. Keep the PR merge-tree validation and the
   post-merge push validation; feature branches can still use manual dispatch
   before opening a PR.
+  Both workflows retain push coverage for `main`, `develop`, and `dev`; their
+  PR target lists are `main` and `dev`. `develop` is retained for compatibility,
+  not removed merely because it is absent from the current branch inventory.
 - Submit `test build` in one Gradle invocation on every OS, plus
   `createExecutableJar` on Linux. Retain `--continue`, the Windows daemon/parallel
   settings, and always-uploaded test reports. Only lint remains delegated to the
@@ -80,6 +83,10 @@ states. Cancellation will only save work when a PR is updated before completion.
   configuration-cache files: configuration may capture credentials. No new cache
   mechanism, encryption secret, cache trust boundary, or production secret access
   is introduced. Forks retain normal `pull_request` secret restrictions.
+  The pinned Gradle 9.7.1 dependency report uses a cached report model; the
+  combined quality invocation in run 35044850572 stored its configuration cache
+  successfully. An older Gradle dependency-report incompatibility is not evidence
+  that this invocation discards the lint configuration cache.
 - **Change selection:** broad build/test coverage remains on every PR. Existing
   native/security workflows already have path selection. Expanding it safely
   needs coverage of build logic, dependency catalogs, shared modules, scripts and

@@ -343,17 +343,13 @@ jobs:
         run: |
           echo "🧪 Testing centralized version system"
           
-          # Test version increment tasks
+          # Display the configured version and compile its generated constants.
           echo "📋 Current version info:"
           # One invocation still exercises every original compatibility task.
           ./gradlew showVersion generateVersionConstants :composeApp:compileKotlinDesktop
           
-          echo "🔄 Testing version increment (dry run):"
-          echo "- Patch increment test"
           ORIGINAL_VERSION=$(grep "^app.version=" version.properties | cut -d'=' -f2)
           echo "Original version: $ORIGINAL_VERSION"
-          
-          # Test that version system works
           
           # Verify generated constants exist
           if [ -f "composeApp/build/generated/source/version/ai/rever/boss/utils/VersionConstants.kt" ]; then
