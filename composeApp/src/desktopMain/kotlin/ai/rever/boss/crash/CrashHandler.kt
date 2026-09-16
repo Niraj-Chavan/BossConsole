@@ -238,6 +238,8 @@ object CrashHandler {
      * (BossConsole-Releases#28).
      * Match the throwing getter and retry path, not arbitrary initialization errors
      * or direct application calls to unsubscribe before connecting.
+     * The installed-SDK regression test exercises the actual delayed retry, so an
+     * SDK fix or stack change requires re-evaluating this narrow containment rule.
      */
     private fun isStaleRealtimeRejoin(throwable: Throwable): Boolean {
         if (throwable !is IllegalStateException || throwable.message != "Websocket not yet initialized") return false

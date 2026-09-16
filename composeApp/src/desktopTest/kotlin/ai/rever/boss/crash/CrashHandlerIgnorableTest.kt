@@ -1,15 +1,23 @@
 package ai.rever.boss.crash
 
+import io.github.jan.supabase.annotations.SupabaseInternal
 import io.github.jan.supabase.auth.exception.TokenExpiredException
+import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.realtime.Realtime
+import io.github.jan.supabase.realtime.channel
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Unit tests for [CrashHandler.isIgnorable] — recoverable background failures
  * must not pop the crash dialog (dismissing it exits the app).
  */
 class CrashHandlerIgnorableTest {
+    // First four frames copied from BossConsole-Releases#28, not inferred from SDK source.
     private fun staleRealtimeRejoin(): IllegalStateException =
         IllegalStateException("Websocket not yet initialized").apply {
             stackTrace =
@@ -42,6 +50,37 @@ class CrashHandlerIgnorableTest {
         }
 
     @Test
+    @OptIn(SupabaseInternal::class)
+    fun `installed SDK delayed rejoin produces the recognized failure`() =
+        runBlocking {
+            val client =
+                createSupabaseClient("https://realtime-test.invalid", "test-key") {
+                    install(Realtime) { rejoinDelay = 1.milliseconds }
+                }
+            try {
+                // Reproduce the disconnected state at retry wake-up without making a network request.
+                val channel = client.channel("retry-test")
+                val failure = assertFailsWith<IllegalStateException> { channel.scheduleRejoin() }
+                assertTrue(CrashHandler.isIgnorable(failure), failure.stackTraceToString())
+                val directFailure = assertFailsWith<IllegalStateException> { channel.unsubscribe() }
+                assertFalse(CrashHandler.isIgnorable(directFailure))
+            } finally {
+                client.close()
+            }
+        }
+
+    @Test
+    fun `missing or changed stack evidence remains reportable`() {
+        val empty = staleRealtimeRejoin().apply { stackTrace = emptyArray() }
+        assertFalse(CrashHandler.isIgnorable(empty))
+        val changed =
+            staleRealtimeRejoin().apply {
+                stackTrace = arrayOf(StackTraceElement("other.library.Wrapper", "invoke", "Wrapper.kt", 1)) + stackTrace
+            }
+        assertFalse(CrashHandler.isIgnorable(changed))
+    }
+
+    @Test
     fun `issue 28 stale realtime rejoin is recoverable`() {
         assertTrue(CrashHandler.isIgnorable(staleRealtimeRejoin()))
         assertTrue(CrashHandler.isIgnorable(RuntimeException("background retry failed", staleRealtimeRejoin())))
@@ -54,7 +93,11 @@ class CrashHandlerIgnorableTest {
 
     @Test
     fun `direct unsubscribe without a connection is still a crash`() {
-        val failure = staleRealtimeRejoin().apply { stackTrace = stackTrace.take(2).toTypedArray() }
+        val failure =
+            staleRealtimeRejoin().apply {
+                stackTrace = stackTrace.take(2).toTypedArray() +
+                    StackTraceElement("ai.rever.boss.Application", "unsubscribe", "Application.kt", 1)
+            }
         assertFalse(CrashHandler.isIgnorable(failure))
     }
 
@@ -71,8 +114,7 @@ class CrashHandlerIgnorableTest {
                         frames
                             .map {
                                 StackTraceElement("other.library.Channel", it.methodName, it.fileName, it.lineNumber)
-                            }
-                            .toTypedArray()
+                            }.toTypedArray()
                 },
             ),
         )
