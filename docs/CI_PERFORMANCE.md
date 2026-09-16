@@ -36,8 +36,14 @@ summary job. The version prerequisite took 5-8 seconds plus 1-3 seconds of queue
 
 - Cancel superseded PR runs independently in Build & Test, Native file boundaries,
   and Authenticated IPC boundaries. Push and manual runs use unique run IDs and
-  cannot cancel each other or PR runs. Workflow names, check names and triggers
-  remain unchanged, including the workflow-run-based review authorization flow.
+  cannot cancel each other or PR runs. Workflow and check names remain unchanged,
+  including the workflow-run-based review authorization flow.
+- Run the native-file push matrix on integration branches (`main`, `develop`,
+  `dev`), with feature-branch validation on PRs. The initial push and opening of
+  this PR produced native-file runs 35044732899 and 35044764465 for the same head,
+  consuming two five-job matrices. Keep the PR merge-tree validation and the
+  post-merge push validation; feature branches can still use manual dispatch
+  before opening a PR.
 - Submit `test build` in one Gradle invocation on every OS, plus
   `createExecutableJar` on Linux. Retain `--continue`, the Windows daemon/parallel
   settings, and always-uploaded test reports. Only lint remains delegated to the
@@ -81,8 +87,9 @@ states. Cancellation will only save work when a PR is updated before completion.
   changes. No check is skipped for speed in this change.
 - **Overlap and platforms:** JVM regressions overlap with dedicated native jobs,
   but Graal native execution and old-glibc coverage are distinct and retained.
-  No OS or architecture is removed. Push and PR validation can cover different
-  trees, so those events are not coalesced.
+  No OS or architecture is removed. Integration pushes and PR validation cover
+  different trees, so both remain. Only redundant native-file feature pushes
+  are removed, aligning this workflow with the main build's branch policy.
 - **Artifacts/releases:** the existing Linux JAR and test reports remain. PR
   outputs are not reused in privileged release jobs. Release version mutation,
   signing, notarization, environment approval and publication remain unchanged.
