@@ -12,6 +12,8 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SwipeNavParityTest {
@@ -73,26 +75,7 @@ class SwipeNavParityTest {
         try {
             evidence.writeText(results.toString(), Charsets.UTF_8)
             val process = runEvidenceProbe(File(root, "scripts/test/test-swipe-nav.js"), evidence, output)
-            val completed = process.waitFor(120, TimeUnit.SECONDS)
-            if (!completed) process.destroyForcibly()
-            assertTrue(completed, "page parity suite timed out")
-
-            val rawOutput =
-                if (output.isFile && output.length() > 0L) {
-                    awaitEvidence(output)
-                } else {
-                    ""
-                }
-            val actualEvidence = normalizeTerminalEvidence(rawOutput)
-            assertEquals(
-                0,
-                process.exitValue(),
-                "Native terminal evidence did not match swipe-navigation page scenarios:\n$actualEvidence",
-            )
-            assertTrue(
-                actualEvidence.contains("all checks passed"),
-                "Native terminal evidence did not match swipe-navigation page scenarios",
-            )
+            awaitProbe(process, output)
         } finally {
             evidence.delete()
             output.delete()
@@ -106,23 +89,12 @@ class SwipeNavParityTest {
     ): Process {
         val isWindows = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
         val command =
-            if (isWindows) {
-                listOf(
-                    "cmd.exe",
-                    "/c",
-                    "node",
-                    script.absolutePath,
-                    "--native-results",
-                    evidenceFile.absolutePath,
-                )
-            } else {
-                listOf(
-                    "node",
-                    script.absolutePath,
-                    "--native-results",
-                    evidenceFile.absolutePath,
-                )
-            }
+            listOf(
+                if (isWindows) "node.exe" else "node",
+                script.absolutePath,
+                "--native-results",
+                evidenceFile.absolutePath,
+            )
 
         return try {
             ProcessBuilder(command)
@@ -135,28 +107,60 @@ class SwipeNavParityTest {
         }
     }
 
-    private fun awaitEvidence(
-        file: File,
-        timeoutMs: Long = 10_000,
-    ): String {
-        val deadline = System.currentTimeMillis() + timeoutMs
-
-        while (System.currentTimeMillis() < deadline) {
-            if (file.isFile && file.length() > 0L) {
-                return file.readText(Charsets.UTF_8)
+    private fun awaitProbe(
+        process: Process,
+        output: File,
+        timeoutSeconds: Long = 120,
+    ) {
+        val completed =
+            try {
+                process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+            } finally {
+                if (process.isAlive) {
+                    process.destroyForcibly()
+                    assertTrue(process.waitFor(5, TimeUnit.SECONDS), "page parity process did not terminate")
+                }
             }
-            Thread.sleep(50)
-        }
-
-        error("Timed out waiting for native terminal evidence: ${file.absolutePath}")
+        // Node has exited and closed its redirected output; no file polling is needed.
+        val actualEvidence = output.readText(Charsets.UTF_8)
+        assertTrue(completed, "page parity suite timed out after ${timeoutSeconds}s; partial output:\n$actualEvidence")
+        assertEquals(
+            0,
+            process.exitValue(),
+            "Native terminal evidence did not match swipe-navigation page scenarios:\n$actualEvidence",
+        )
+        assertTrue(actualEvidence.contains("all checks passed"), "Page parity suite did not finish:\n$actualEvidence")
     }
 
-    private fun normalizeTerminalEvidence(value: String): String =
-        value
-            .replace("\r\n", "\n")
-            .replace('\r', '\n')
-            .lineSequence()
-            .map(String::trimEnd)
-            .filter { it.isNotBlank() }
-            .joinToString("\n")
+    @Test
+    fun `timed out probe terminates Node before returning`() {
+        val script = File.createTempFile("swipe-timeout-probe", ".js")
+        val output = File.createTempFile("swipe-timeout-probe", ".log")
+        try {
+            script.writeText("setInterval(() => {}, 1000);", Charsets.UTF_8)
+            val process = runEvidenceProbe(script, script, output)
+            val failure = assertFailsWith<AssertionError> { awaitProbe(process, output, timeoutSeconds = 1) }
+            assertTrue(failure.message.orEmpty().contains("page parity suite timed out"))
+            assertFalse(process.isAlive, "Timed out Node process must be reaped before temporary files are deleted")
+        } finally {
+            script.delete()
+            output.delete()
+        }
+    }
+
+    @Test
+    fun `success text cannot hide a failed probe`() {
+        val script = File.createTempFile("swipe-failed-probe", ".js")
+        val output = File.createTempFile("swipe-failed-probe", ".log")
+        try {
+            script.writeText("console.log('all checks passed'); process.exitCode = 7;", Charsets.UTF_8)
+            val process = runEvidenceProbe(script, script, output)
+            val failure = assertFailsWith<AssertionError> { awaitProbe(process, output) }
+            assertTrue(failure.message.orEmpty().contains("Native terminal evidence did not match"))
+            assertEquals(7, process.exitValue())
+        } finally {
+            script.delete()
+            output.delete()
+        }
+    }
 }
