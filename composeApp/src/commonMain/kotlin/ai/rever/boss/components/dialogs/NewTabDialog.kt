@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Code
@@ -541,6 +542,22 @@ fun NewTabDialog(
                     color = BossTheme.colors.textPrimary,
                     modifier = Modifier.padding(bottom = 16.dp),
                 )
+
+                // Home is a browser-backed dashboard. Use the owning dialog's creation route
+                // so the active pane and any requested split are honored without replacing tabs.
+                if (TabType.URL in availableTypes) {
+                    TextButton(
+                        onClick = {
+                            onCreateTab(TabType.URL, "about:blank")
+                            onDismiss()
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    ) {
+                        Icon(Icons.Default.Home, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Open Home")
+                    }
+                }
 
                 if (availableTypes.isEmpty() && pluginTypes.isEmpty()) {
                     // Empty state when no tab plugins are enabled

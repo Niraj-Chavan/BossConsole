@@ -59,6 +59,7 @@ class NewTabUrlFieldTest {
         }
 
     private val opened = mutableListOf<String>()
+    private var dismissed = 0
     private lateinit var temp: java.io.File
     private var originalFile: java.io.File? = null
     private val previousModal = OverlayConfig.heavyweightModal
@@ -117,17 +118,47 @@ class NewTabUrlFieldTest {
         temp.delete()
     }
 
-    private fun openDialog() {
+    private fun openDialog(tabRegistry: TabRegistry = registry) {
         rule.setContent {
             CompositionLocalProvider(LocalHeavyweightOverlays provides true) {
                 NewTabDialog(
-                    onDismiss = {},
+                    onDismiss = { dismissed++ },
                     onCreateTab = { _, path -> opened += path },
-                    tabRegistry = registry,
+                    tabRegistry = tabRegistry,
                 )
             }
         }
-        rule.onNodeWithText("Enter URL or search term").assertExists()
+        if (tabRegistry.isRegistered(FluckTabType.typeId)) {
+            rule.onNodeWithText("Enter URL or search term").assertExists()
+        }
+    }
+
+    @Test
+    fun `Home opens directly without a URL and dismisses the picker`() {
+        openDialog()
+        settle()
+        rule.onNodeWithText("Open Home").performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("about:blank"), opened)
+        assertEquals(1, dismissed)
+    }
+
+    @Test
+    fun `Home ignores unfinished URL input instead of navigating to it`() {
+        openDialog()
+        rule.onNode(hasSetTextAction()).performTextInput("example.com")
+        rule.onNodeWithText("Open Home").performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("about:blank"), opened)
+        assertEquals(1, dismissed)
+    }
+
+    @Test
+    fun `Home is not offered without its browser tab provider`() {
+        openDialog(TabRegistry())
+        rule.onNodeWithText("Open Home").assertDoesNotExist()
+        assertEquals(emptyList(), opened)
+        assertEquals(0, dismissed)
     }
 
     /** Past the suggestion lookup's debounce, then let the completion effect run. */
