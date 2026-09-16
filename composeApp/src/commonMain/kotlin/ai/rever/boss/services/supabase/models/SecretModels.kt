@@ -44,6 +44,38 @@ data class SecretEntry(
     val canManageOrDeny: Boolean get() = canManage == true
 }
 
+/** Non-secret row returned to an execution principal's list/search calls. */
+@Serializable
+data class ExecutionSecretMetadata(
+    val id: String,
+    val website: String,
+    val username: String,
+    @SerialName("expiration_date")
+    val expirationDate: String? = null,
+    val tags: List<String> = emptyList(),
+    @SerialName("created_at")
+    val createdAt: String,
+    @SerialName("updated_at")
+    val updatedAt: String,
+    @SerialName("access_level")
+    val accessLevel: String,
+)
+
+/** One explicit human grant returned by list_secret_execution_grants. */
+@Serializable
+data class ExecutionSecretGrant(
+    @SerialName("principal_type")
+    val principalType: String,
+    @SerialName("principal_id")
+    val principalId: String,
+    @SerialName("granted_at")
+    val grantedAt: String,
+    @SerialName("granted_by_user_id")
+    val grantedByUserId: String,
+    @SerialName("access_level")
+    val accessLevel: String = "use",
+)
+
 /**
  * Metadata for a secret (2FA information)
  */

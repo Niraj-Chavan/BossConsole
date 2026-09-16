@@ -119,11 +119,11 @@ class SettingsSidebarSearchTest {
         }
 
         compose.onNodeWithText("AI Providers").assertExists()
-        compose.onAllNodesWithText("Plugins > Secret Manager panel").onFirst().assertExists()
+        compose.onAllNodesWithText("Plugins > AI Gateway panel").onFirst().assertExists()
 
         compose.onNodeWithText("AI Providers").performClick()
 
-        assertEquals(PanelIds.SECRET_MANAGER, picked?.panel)
+        assertEquals(PanelIds.AI_GATEWAY, picked?.panel)
         assertEquals(null, picked?.section, "a signpost that names a section would navigate this window instead")
     }
 

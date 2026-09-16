@@ -172,7 +172,11 @@ intellij-platform = "243.21565.199"
 # bump-pushes before building, so api main's version IS the version already released and the next
 # merge cuts version + 1 - re-read it when #44 actually merges, because anything landing first
 # moves this and the topofmind pin again.
-boss-plugin-api = "1.0.93"
+#
+# 1.0.94 adds the host-implemented execution-principal secret contract. Plugins and exact MCP
+# tools receive scoped metadata/list/get/create operations; only trusted Secret Manager receives
+# the human grant manager. The API PR must merge and publish before this host PR can pass CI.
+boss-plugin-api = "1.0.94"
 
 [libraries]
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }

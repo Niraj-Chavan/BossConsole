@@ -304,9 +304,8 @@ plugin. The check is an entry whose `jarPath` still exists.
 ### A settings section can offer to install the plugin that serves it
 
 Two sections render a panel that belongs to a plugin - `Editor` and `Language servers`, both
-editor-tab. (`Settings > AI Providers` was a third, served by secret-manager, until that section
-moved into the plugin's own panel; Settings search reaches it through a **panel signpost** now, and
-that entry is filtered on the panel being registered rather than explaining its absence.) Both used
+editor-tab. AI provider search results use a **panel signpost** to the AI Gateway panel, filtered
+on that panel being registered rather than explaining its absence. Both used
 to say "isn't loaded yet" for every reason there was no panel, which is true of exactly one of
 them. A plugin that was never
 installed, or that the user switched off, does not arrive however long they look at it.
@@ -460,7 +459,7 @@ taking `first().replacementDisplayName` told the user their panel moved somewher
 `supabase/functions/boss-ai` serves multiple configured models through one
 authenticated endpoint. Configuration and accounting tables are service-role-only;
 every inference rechecks live per-model permissions and atomically reserves usage.
-Secret Manager owns BOSS AI authentication and discovery. It requests a single-use ticket
+AI Gateway owns BOSS AI authentication and discovery. It requests a single-use ticket
 through the existing authenticated RPC API and exchanges it with the edge function.
 The database derives identity from auth.uid(); only the service role can redeem tickets.
 No BOSS AI-specific desktop host registration or shared vault definition is required.
@@ -537,46 +536,31 @@ implementation lives in `desktopMain` (it speaks HTTP), so `DefaultPlugin` reads
 self-healing. Nothing has ever read it from that file - it is an **environment variable**, and
 the priority order above does not apply to it.
 
-- **AI providers** (chat, agents, plugin AI features) are owned entirely by the
-  **secret-manager** plugin, in the **AI section of its own panel**. The host has no provider
-  list and no settings section for one; it relays the plugin's through
-  `PluginContext.llmProvider`. See that plugin's `AGENTS.md`.
+- **AI providers** (chat, agents, plugin AI features) are owned entirely by the **ai-gateway**
+  plugin. Its panel owns provider setup, enabled models, usage, and token accounting. Secret
+  Manager owns only encrypted storage and the human grant UI.
 
-  The host used to render `Settings > AI Providers` from that plugin, through a
-  `LlmProviderAPIAccess` singleton. Both are gone: the credentials live in that panel's vault,
-  so the page that manages them belongs beside them rather than two clicks away in another
-  window, and the singleton existed only to give host composables a plugin handle. What remains
-  is `DefaultPlugin.llmProvider`, which resolves against **its own** instance's registry -
-  deliberately never through a singleton, because `DefaultPlugin` is per window and a shared
-  cached reference would hand window 1's plugins whatever window 2 registered.
+  Provider credentials cross the host through `SecretAccessProvider`, bound to the calling
+  plugin or exact MCP tool. Ownerless legacy secrets are invisible to execution principals until
+  a human explicitly grants use. Grants never confer update or delete rights. The broad
+  `SecretDataProvider` remains restricted to trusted human surfaces.
 
   A stale `boss://settings?section=LLM_PROVIDERS` deep link now resolves to
   `SettingsDeepLink.Unresolved`, so the window opens on its default section rather than
   failing.
 
   Settings search still answers for `api key`, `anthropic`, `claude` and the rest: a curated
-  **panel signpost** (`panelSignpost` in `SettingsSearchEntries.kt`) opens the Secret Manager
-  panel and raises the main window. It is the only search entry that navigates out of the
+  **panel signpost** (`panelSignpost` in `SettingsSearchEntries.kt`) opens the AI Gateway panel
+  and raises the main window. It is the only search entry that navigates out of the
   Settings window. The delegated-section keywords could not have covered this - a panel is not a
   settings page, so nothing merges it into the index at query time.
 
-  **There is deliberately no version floor on secret-manager.** The AI section exists in that
-  plugin only from 1.2.19, and nothing in the host gates on it: secret-manager is not in the
-  `system_plugins` manifest, so no `min_version` applies, and plugin updates surface in the
-  Toolbox rather than installing themselves. A user on 1.2.18 who takes this host build gets the
-  Secret Manager panel with no AI section in it. That is accepted rather than overlooked, and it
-  is a weaker case than `RetiredPlugins.minReplacementVersion`, which names a release because
-  getting it wrong **deletes** the user's only secrets panel. Here nothing is deleted and nothing
-  is lost - the credentials stay in the vault, `PluginContext.llmProvider` keeps serving them to
-  every plugin that asks, and updating the plugin restores the page. The floor would have to be
-  enforced somewhere, and the only mechanism the host has for that is refusing to load the
-  plugin, which would take the vault down with it.
 - **AI self-healing / repair** is the one credential the host still resolves itself, because
   `SelfHealingSettingsManager` runs before any window or plugin exists and so cannot reach the
   plugin's store. It reads `AI_REPAIR_API_KEY`, then the provider's own variable
   (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / …), then the legacy `~/.boss/llm_settings.json` and
   its `.migrated` sibling - all as **env vars / files, never local.properties**. A key rotated
-  in the Secret Manager panel's AI section does not reach it.
+  in the AI Gateway panel does not reach it.
 
 There are NO credential fallbacks in source (public repo). Packaged builds get
 the JxBrowser license and Supabase settings baked in by the

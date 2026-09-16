@@ -170,23 +170,21 @@ private fun panelSignpost(
 /**
  * Settings that used to be in this window and are now somewhere else.
  *
- * AI providers were `Settings > AI Providers` until the section was removed: the credentials live
- * in the Secret Manager panel's vault and the page that manages them moved beside them. Deleting
+ * AI providers were `Settings > AI Providers` until the section was removed. AI Gateway now owns
+ * provider and model configuration while Secret Manager only stores encrypted values. Deleting
  * the section without this left the words a user actually types - "api key", "anthropic", "claude"
  * - matching nothing, so Settings search answered "No matching settings" for a feature that exists.
  *
  * The first six keywords are the ones the deleted `delegated(LLM_PROVIDERS, ...)` entry carried.
  * The rest name the panel itself, because [SettingsSearchMatcher] scores label, group, section
- * display name and keywords - **not** `context`. Without them the breadcrumb reads "Secret Manager
- * panel" and yet "secret manager" matched nothing, which is the likeliest thing to be typed by
- * someone who half-remembers that the keys live in a vault.
+ * display name and keywords - **not** `context`.
  */
 private fun signpostEntries() =
     listOf(
         panelSignpost(
             label = "AI Providers",
-            panel = PanelIds.SECRET_MANAGER,
-            owner = "Secret Manager panel",
+            panel = PanelIds.AI_GATEWAY,
+            owner = "AI Gateway panel",
             "api key",
             "anthropic",
             "openai",
@@ -194,8 +192,9 @@ private fun signpostEntries() =
             "claude",
             "gateway",
             "llm",
-            "secret manager",
-            "vault",
+            "ai gateway",
+            "usage",
+            "tokens",
             "credentials",
         ),
     )

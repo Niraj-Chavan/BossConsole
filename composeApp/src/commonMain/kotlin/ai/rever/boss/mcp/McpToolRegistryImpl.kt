@@ -10,6 +10,8 @@ import ai.rever.boss.plugin.api.McpToolResult
 import ai.rever.boss.plugin.api.RegisteredMcpTool
 import ai.rever.boss.plugin.logging.LogSanitizer
 import ai.rever.boss.plugin.pathutils.BossDirectories
+import ai.rever.boss.services.supabase.SecretExecutionPrincipal
+import ai.rever.boss.services.supabase.SecretExecutionPrincipalContext
 import ai.rever.boss.utils.atomicWriteText
 import ai.rever.boss.utils.logging.BossLogger
 import ai.rever.boss.utils.logging.LogCategory
@@ -1039,7 +1041,16 @@ internal class McpToolRegistryCore(
     @Suppress("TooGenericExceptionCaught") // Plugin handlers may throw any implementation-specific exception.
     private suspend fun executeUncapped(tool: RegisteredMcpTool, args: McpToolArgs): McpToolResult =
         try {
-            withTimeout(invokeTimeoutMs) { tool.definition.handler.call(args) }
+            // Narrow any SecretAccessProvider captured by the plugin to this exact MCP tool for
+            // the full handler coroutine. The identity comes from the host registry entry, never
+            // from model-controlled arguments or a provider-supplied display name.
+            withContext(
+                SecretExecutionPrincipalContext(
+                    SecretExecutionPrincipal.mcpTool(tool.providerId, tool.definition.name),
+                ),
+            ) {
+                withTimeout(invokeTimeoutMs) { tool.definition.handler.call(args) }
+            }
         } catch (_: TimeoutCancellationException) {
             McpToolResult("Tool '${tool.definition.name}' timed out after ${invokeTimeoutMs / 1000}s", isError = true)
         } catch (cancelled: CancellationException) {

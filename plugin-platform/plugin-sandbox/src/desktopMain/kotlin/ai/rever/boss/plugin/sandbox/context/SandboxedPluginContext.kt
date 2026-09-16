@@ -128,6 +128,12 @@ class SandboxedPluginContext(
     override val secretDataProvider: SecretDataProvider?
         get() = delegate.secretDataProvider
 
+    override val secretAccessProvider: ai.rever.boss.plugin.api.SecretAccessProvider?
+        get() = delegate.secretAccessProvider
+
+    override val secretGrantManager: ai.rever.boss.plugin.api.SecretGrantManager?
+        get() = delegate.secretGrantManager
+
     override val llmProvider: LlmProvider?
         get() = delegate.llmProvider
 

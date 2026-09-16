@@ -39,6 +39,8 @@ val fetchApiPluginJar =
         val targetPath = apiPluginJar.get().asFile.absolutePath
         val siblingPaths =
             listOf(
+                // Flat local workspace layout: BossProjects/BossConsole-* + BossProjects/boss-plugin-api
+                rootDir.resolve("../boss-plugin-api/build/libs/boss-plugin-api-$version.jar").absolutePath,
                 // Main checkout layout: Boss/BossConsole + Boss/boss_plugins
                 rootDir.resolve("../boss_plugins/boss-plugin-api/build/libs/boss-plugin-api-$version.jar").absolutePath,
                 // Worktree layout: Boss/.worktrees/<name> + Boss/boss_plugins

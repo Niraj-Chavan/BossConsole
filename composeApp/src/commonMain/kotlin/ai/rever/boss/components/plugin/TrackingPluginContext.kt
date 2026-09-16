@@ -34,6 +34,7 @@ import ai.rever.boss.plugin.api.PanelInfo
 import ai.rever.boss.plugin.api.PanelRegistry
 import ai.rever.boss.plugin.api.PerformanceDataProvider
 import ai.rever.boss.plugin.api.PluginContext
+import ai.rever.boss.plugin.api.PluginLoaderDelegate
 import ai.rever.boss.plugin.api.PluginManifest
 import ai.rever.boss.plugin.api.PluginSandboxRef
 import ai.rever.boss.plugin.api.PluginStorageFactory
@@ -43,7 +44,10 @@ import ai.rever.boss.plugin.api.ProjectSearchProvider
 import ai.rever.boss.plugin.api.RoleManagementProvider
 import ai.rever.boss.plugin.api.RunConfigurationDataProvider
 import ai.rever.boss.plugin.api.ScreenCaptureProvider
+import ai.rever.boss.plugin.api.SecretAccessProvider
 import ai.rever.boss.plugin.api.SecretDataProvider
+import ai.rever.boss.plugin.api.SecretGrantManager
+import ai.rever.boss.plugin.api.SecretPrincipalData
 import ai.rever.boss.plugin.api.SemanticTokenProvider
 import ai.rever.boss.plugin.api.SettingsProvider
 import ai.rever.boss.plugin.api.SplitViewOperations
@@ -59,9 +63,19 @@ import ai.rever.boss.plugin.api.UserManagementProvider
 import ai.rever.boss.plugin.api.WorkspaceDataProvider
 import ai.rever.boss.plugin.api.ZoomSettingsProvider
 import ai.rever.boss.plugin.browser.BrowserService
+import ai.rever.boss.services.supabase.SecretAccessProviderImpl
+import ai.rever.boss.services.supabase.SecretExecutionPrincipal
+import ai.rever.boss.services.supabase.SecretGrantManagerImpl
 import com.arkivanov.decompose.ComponentContext
 import kotlinx.coroutines.CoroutineScope
 import java.util.concurrent.ConcurrentHashMap
+
+private const val SECRET_MANAGER_PLUGIN_ID = "ai.rever.boss.plugin.dynamic.secretmanager"
+private val HUMAN_SECRET_PROVIDER_PLUGINS =
+    setOf(
+        SECRET_MANAGER_PLUGIN_ID,
+        "ai.rever.boss.plugin.dynamic.fluckbrowser",
+    )
 
 /**
  * Registry of all registrations made by dynamic plugins.
@@ -333,7 +347,27 @@ class TrackingPluginContext(
     override val gitDataProvider: GitDataProvider? get() = delegate.gitDataProvider
     override val projectSearchProvider: ProjectSearchProvider? get() = delegate.projectSearchProvider
     override val fileSystemDataProvider: FileSystemDataProvider? get() = delegate.fileSystemDataProvider
-    override val secretDataProvider: SecretDataProvider? get() = delegate.secretDataProvider
+
+    // The broad provider is a human-vault surface. Ordinary plugins must not be able to list it;
+    // they receive the principal-scoped provider below. Browser filling is a trusted human action
+    // that writes directly into the page and Secret Manager is the human administration UI.
+    override val secretDataProvider: SecretDataProvider?
+        get() = delegate.secretDataProvider.takeIf { pluginId in HUMAN_SECRET_PROVIDER_PLUGINS }
+
+    override val secretAccessProvider: SecretAccessProvider by lazy {
+        SecretAccessProviderImpl(SecretExecutionPrincipal.plugin(pluginId))
+    }
+
+    private val scopedSecretGrantManager: SecretGrantManager? by lazy {
+        if (pluginId == SECRET_MANAGER_PLUGIN_ID) {
+            SecretGrantManagerImpl(::secretPrincipalCatalog)
+        } else {
+            null
+        }
+    }
+
+    override val secretGrantManager: SecretGrantManager?
+        get() = scopedSecretGrantManager
     override val llmProvider: LlmProvider? get() = delegate.llmProvider
     override val brokeredCredentialProvider: BrokeredCredentialProvider?
         get() = delegate.brokeredCredentialProvider
@@ -344,7 +378,15 @@ class TrackingPluginContext(
     override val authDataProvider: AuthDataProvider? get() = delegate.authDataProvider
     override val userManagementProvider: UserManagementProvider? get() = delegate.userManagementProvider
     override val roleManagementProvider: RoleManagementProvider? get() = delegate.roleManagementProvider
-    override val supabaseDataProvider: SupabaseDataProvider? get() = delegate.supabaseDataProvider
+    override val supabaseDataProvider: SupabaseDataProvider? by lazy {
+        delegate.supabaseDataProvider?.let { provider ->
+            if (pluginId == SECRET_MANAGER_PLUGIN_ID) {
+                provider
+            } else {
+                SecretSafeSupabaseDataProvider(provider)
+            }
+        }
+    }
 
     override val panelEventProvider: PanelEventProvider? get() = delegate.panelEventProvider
     override val settingsProvider: SettingsProvider? get() = delegate.settingsProvider
@@ -357,6 +399,37 @@ class TrackingPluginContext(
 
     // Plugin Store API key provider - delegate to underlying context
     override val pluginStoreApiKeyProvider: PluginStoreApiKeyProvider? get() = delegate.pluginStoreApiKeyProvider
+
+    private fun secretPrincipalCatalog(): List<SecretPrincipalData> {
+        val plugins =
+            runCatching {
+                delegate
+                    .getPluginAPI(PluginLoaderDelegate::class.java)
+                    ?.getLoadedPlugins()
+                    .orEmpty()
+                    .filter { it.isEnabled && it.healthy && !it.isIncompatible }
+                    .map {
+                        SecretPrincipalData(
+                            principalType = "plugin",
+                            principalId = it.pluginId,
+                            displayName = it.displayName,
+                            description = it.description.takeIf(String::isNotBlank),
+                        )
+                    }
+            }.getOrDefault(emptyList())
+        val tools =
+            runCatching {
+                delegate.mcpToolRegistry?.allTools?.value.orEmpty().map {
+                    SecretPrincipalData(
+                        principalType = "mcp_tool",
+                        principalId = "${it.providerId}/${it.definition.name}",
+                        displayName = it.definition.name,
+                        description = it.definition.description,
+                    )
+                }
+            }.getOrDefault(emptyList())
+        return plugins + tools
+    }
 
     // Tab update provider factory - delegate to underlying context
     override val tabUpdateProviderFactory: TabUpdateProviderFactory? get() = delegate.tabUpdateProviderFactory
@@ -503,8 +576,16 @@ class TrackingPluginContext(
         delegate.unregisterStatusBarItem(itemId)
     }
 
-    // Plugin-to-plugin API access - delegate to underlying context
-    override fun <T : Any> getPluginAPI(apiClass: Class<T>): T? = delegate.getPluginAPI(apiClass)
+    // Plugin-to-plugin API access must preserve the same secret boundary as the typed properties.
+    // Otherwise a plugin could ask the registry for the broad provider and bypass its bound principal.
+    override fun <T : Any> getPluginAPI(apiClass: Class<T>): T? =
+        when (apiClass) {
+            SecretDataProvider::class.java -> secretDataProvider?.let(apiClass::cast)
+            SecretAccessProvider::class.java -> apiClass.cast(secretAccessProvider)
+            SecretGrantManager::class.java -> secretGrantManager?.let(apiClass::cast)
+            SupabaseDataProvider::class.java -> supabaseDataProvider?.let(apiClass::cast)
+            else -> delegate.getPluginAPI(apiClass)
+        }
 
     override fun registerPluginAPI(api: Any) = delegate.registerPluginAPI(api)
 
@@ -554,6 +635,42 @@ class TrackingPluginContext(
 
         // Clear tracking records
         tracker.clearPlugin(pluginId)
+    }
+}
+
+/**
+ * Prevents ordinary plugins from reaching secret tables or RPC functions through the generic
+ * database escape hatch. Secret operations must use [SecretAccessProvider], which binds every
+ * request to the host-derived plugin or MCP-tool principal.
+ */
+internal class SecretSafeSupabaseDataProvider(
+    private val delegate: SupabaseDataProvider,
+) : SupabaseDataProvider {
+    override suspend fun select(
+        table: String,
+        columns: String,
+        filters: List<ai.rever.boss.plugin.api.QueryFilter>,
+        range: ai.rever.boss.plugin.api.QueryRange?,
+    ): Result<String> =
+        if (table.isSecretSurface()) {
+            Result.failure(SecurityException("Secret tables are available only through SecretAccessProvider"))
+        } else {
+            delegate.select(table, columns, filters, range)
+        }
+
+    override suspend fun rpc(
+        function: String,
+        parameters: String,
+    ): Result<String> =
+        if (function.isSecretSurface()) {
+            Result.failure(SecurityException("Secret RPCs are available only through SecretAccessProvider"))
+        } else {
+            delegate.rpc(function, parameters)
+        }
+
+    private fun String.isSecretSurface(): Boolean {
+        val normalized = lowercase().filter { it.isLetterOrDigit() || it == '_' }
+        return normalized.contains("secret") || normalized.contains("credential")
     }
 }
 

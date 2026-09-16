@@ -150,8 +150,8 @@ class SettingsSearchIndexShapeTest {
             val hits = SettingsSearchMatcher.search(query, SettingsSearchIndex.builtIn)
 
             assertTrue(
-                hits.any { it.entry.panel == PanelIds.SECRET_MANAGER },
-                "searching '$query' no longer offers the Secret Manager panel: ${hits.map { it.entry.label }}",
+                hits.any { it.entry.panel == PanelIds.AI_GATEWAY },
+                "searching '$query' no longer offers the AI Gateway panel: ${hits.map { it.entry.label }}",
             )
         }
     }
