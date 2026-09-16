@@ -8,9 +8,14 @@ import ai.rever.boss.ipc.proto.ProcessManifest
 import ai.rever.boss.ipc.proto.RepairAction
 import ai.rever.boss.ipc.proto.RepairApproval
 import ai.rever.boss.ipc.proto.RepairHint
+import ai.rever.boss.ipc.proto.RepairHistoryRequest
 import ai.rever.boss.ipc.proto.RepairStrategy
 import io.grpc.Context
+import io.grpc.Status
+import io.grpc.StatusRuntimeException
 import io.grpc.kotlin.GrpcContextElement
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import java.io.File
 import java.nio.file.Files
@@ -18,6 +23,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -78,6 +84,170 @@ class OrchestratorServiceImplTest {
             ).build()
 
     // ---- the approval response says what happened ----
+
+    @Test
+    fun `full multibyte history fits the default grpc receive limit`() =
+        runTest(hostContext) {
+            val service = OrchestratorServiceImpl(engine())
+            val original = report("界".repeat(200), RepairStrategy.REPAIR_STRATEGY_PATCH_CONFIG)
+            val manifest = original.manifest.toBuilder()
+            manifest.setRepairHints(
+                0,
+                manifest.getRepairHints(0).toBuilder().setSuggestedFix("界".repeat(RepairLimits.MESSAGE_CHARS)),
+            )
+            val request = original.toBuilder().setManifest(manifest).build()
+            repeat(256) { service.reportFailure(request) }
+            val history = service.getRepairHistory(RepairHistoryRequest.getDefaultInstance())
+            assertEquals(256, history.entriesCount)
+            assertTrue(history.serializedSize < 4 * 1024 * 1024)
+            assertTrue(history.entriesList.all { it.description.isNotBlank() })
+        }
+
+    @Test
+    fun `custom large history refuses oversized responses and supports a smaller request`() =
+        runTest(hostContext) {
+            val service = OrchestratorServiceImpl(engine(), historyLimit = 512)
+            val original = report("界".repeat(200), RepairStrategy.REPAIR_STRATEGY_PATCH_CONFIG)
+            val manifest = original.manifest.toBuilder()
+            manifest.setRepairHints(
+                0,
+                manifest.getRepairHints(0).toBuilder().setSuggestedFix("界".repeat(RepairLimits.MESSAGE_CHARS)),
+            )
+            val request = original.toBuilder().setManifest(manifest).build()
+            repeat(512) { service.reportFailure(request) }
+            val failure =
+                assertFailsWith<StatusRuntimeException> {
+                    service.getRepairHistory(RepairHistoryRequest.getDefaultInstance())
+                }
+            assertEquals(Status.Code.RESOURCE_EXHAUSTED, failure.status.code)
+            val smaller = service.getRepairHistory(RepairHistoryRequest.newBuilder().setLimit(100).build())
+            assertEquals(100, smaller.entriesCount)
+            assertTrue(smaller.serializedSize < 4 * 1024 * 1024)
+        }
+
+    @Test
+    fun `oversized proposals record a failed outcome without consuming approval capacity`() =
+        runTest(hostContext) {
+            val ai =
+                object : AiRepairClient {
+                    override suspend fun proposeSourceFix(
+                        rootCause: String,
+                        sourceFiles: Map<String, String>,
+                        stackTrace: String,
+                        errorMessage: String,
+                    ) = SourceFixProposal("x".repeat(140_000), emptyList())
+
+                    override suspend fun proposeConfigFix(
+                        processId: String,
+                        rootCause: String,
+                        suggestedFix: String?,
+                        errorMessage: String,
+                    ): ConfigFixProposal? = null
+                }
+            val repair = RepairEngine(CrashAnalyzer(), snapshots, ai, dataDir.absolutePath) { _, _ -> }
+            val service = OrchestratorServiceImpl(repair, pendingLimit = 1)
+            val failure =
+                assertFailsWith<StatusRuntimeException> {
+                    service.reportFailure(report("oversized", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+                }
+            assertEquals(Status.Code.RESOURCE_EXHAUSTED, failure.status.code)
+            val outcome = service.getRepairHistory(RepairHistoryRequest.getDefaultInstance()).entriesList.single()
+            assertFalse(outcome.success)
+            assertTrue(outcome.description.contains("size limit"))
+            assertFalse(service.approveRepair(approval(outcome.repairId)).applied)
+            service.reportFailure(report("later", RepairStrategy.REPAIR_STRATEGY_RESTART))
+        }
+
+    @Test
+    fun `completed history is bounded without evicting pending proposals`() =
+        runTest(hostContext) {
+            val service = OrchestratorServiceImpl(engine(), historyLimit = 3, pendingLimit = 2)
+            val pending = service.reportFailure(report("pending", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+            repeat(8) { service.reportFailure(report("done-$it", RepairStrategy.REPAIR_STRATEGY_RESTART)) }
+            val history = service.getRepairHistory(RepairHistoryRequest.getDefaultInstance()).entriesList
+            assertEquals(3, history.size)
+            assertEquals(setOf("pending", "done-6", "done-7"), history.map { it.processId }.toSet())
+            assertTrue(history.any { it.repairId == pending.repairId })
+        }
+
+    @Test
+    fun `abandoned proposals do not block automatic recovery and can be rejected`() =
+        runTest(hostContext) {
+            var restarts = 0
+            val service = OrchestratorServiceImpl(engine { _, _ -> restarts++ }, pendingLimit = 1)
+            val abandoned = service.reportFailure(report("proposal", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+            repeat(3) { service.reportFailure(report("restart-$it", RepairStrategy.REPAIR_STRATEGY_RESTART)) }
+            assertEquals(3, restarts)
+            assertFailsWith<StatusRuntimeException> {
+                service.reportFailure(report("full", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+            }
+            service.approveRepair(approval(abandoned.repairId).toBuilder().setApproved(false).build())
+            assertTrue(
+                service
+                    .reportFailure(report("replacement", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+                    .requiresUserApproval,
+            )
+        }
+
+    @Test
+    fun `pending capacity includes an approval while its execution is still running`() =
+        runTest(hostContext) {
+            val started = CompletableDeferred<Unit>()
+            val finish = CompletableDeferred<Unit>()
+            val service =
+                OrchestratorServiceImpl(
+                    engine(),
+                    historyLimit = 2,
+                    pendingLimit = 1,
+                    onRepairApproved = { _, _ ->
+                        started.complete(Unit)
+                        finish.await()
+                        ApprovalResult.Applied("Applied")
+                    },
+                )
+            val pending = service.reportFailure(report("one", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+            val execution = async { service.approveRepair(approval(pending.repairId)) }
+            started.await()
+            val refused =
+                assertFailsWith<StatusRuntimeException> {
+                    service.reportFailure(report("two", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+                }
+            assertEquals(Status.Code.RESOURCE_EXHAUSTED, refused.status.code)
+            assertFalse(service.approveRepair(approval(pending.repairId)).applied)
+            finish.complete(Unit)
+            assertTrue(execution.await().applied)
+            val next = service.reportFailure(report("two", RepairStrategy.REPAIR_STRATEGY_PATCH_SOURCE))
+            assertTrue(next.requiresUserApproval)
+        }
+
+    @Test
+    fun `analysis admission happens before restart side effects and recovers after completion`() =
+        runTest(hostContext) {
+            val started = CompletableDeferred<Unit>()
+            val finish = CompletableDeferred<Unit>()
+            var calls = 0
+            val service =
+                OrchestratorServiceImpl(
+                    engine { _, _ ->
+                        calls++
+                        started.complete(Unit)
+                        finish.await()
+                    },
+                    analysisLimit = 1,
+                )
+            val first = async { service.reportFailure(report("one", RepairStrategy.REPAIR_STRATEGY_RESTART)) }
+            started.await()
+            val refused =
+                assertFailsWith<StatusRuntimeException> {
+                    service.reportFailure(report("two", RepairStrategy.REPAIR_STRATEGY_RESTART))
+                }
+            assertEquals(Status.Code.RESOURCE_EXHAUSTED, refused.status.code)
+            assertEquals(1, calls)
+            finish.complete(Unit)
+            first.await()
+            service.reportFailure(report("three", RepairStrategy.REPAIR_STRATEGY_RESTART))
+            assertEquals(2, calls)
+        }
 
     @Test
     fun `an approval whose execution fails is not reported as applied`() =
