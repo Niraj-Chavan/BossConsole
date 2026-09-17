@@ -233,7 +233,7 @@ class BoundedBrowserCallTest {
                 entered.countDown()
                 release.await()
             }
-            entered.await()
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
             // Queued, not started: the one thread is inside the post above.
             call.post { }
             call.post { }
@@ -411,7 +411,7 @@ class BoundedBrowserCallTest {
                 entered.countDown()
                 release.await()
             }
-            entered.await()
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
             assertEquals(1, call.inFlight, "a started post must be reported in flight")
             release.countDown()
         } finally {
