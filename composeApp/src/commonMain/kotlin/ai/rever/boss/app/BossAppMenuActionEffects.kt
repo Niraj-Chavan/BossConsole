@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.withFrameNanos
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.launchIn
@@ -123,7 +124,7 @@ internal fun BossAppMenuActionEffects(
                             "Home needs the browser tool. Enable or install Fluck Browser from Tools.",
                         )
                     } else {
-                        androidx.compose.runtime.withFrameNanos { }
+                        withFrameNanos { }
                         if (splitViewState.activePanelId == panelId && splitViewState.getPanel(panelId) != null) {
                             // A pane can close or unmount during the frame boundary.
                             runCatching { splitViewState.focusRequesterFor(panelId).requestFocus() }

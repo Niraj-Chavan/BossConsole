@@ -22,7 +22,9 @@ internal fun goHome(
             ?: tabs.tabs.indexOfFirst(::isHomeTab).takeIf { it >= 0 }
     val index =
         when {
-            tabs.tabs.isEmpty() -> {
+            
+            // An empty pane already renders Home.
+tabs.tabs.isEmpty() -> {
                 null
             }
 
