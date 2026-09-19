@@ -180,6 +180,10 @@ object WorkspacePlaceholders {
      *   shell-parsed and must not be quoted. When true, a placeholder should
      *   stand alone as a whole argument (`{projectPath}/sub` becomes `'…'/sub`,
      *   which POSIX concatenates but PowerShell does not).
+     * Command separators (` && `) are normalized for the current platform BEFORE
+     * substitution: substituted values are data - a Windows project path may
+     * itself contain ` && ` - and must survive byte-intact.
+     *
      * @return The content with placeholders replaced
      */
     fun processPlaceholders(
@@ -187,10 +191,36 @@ object WorkspacePlaceholders {
         projectPath: String?,
         currentFile: String? = null,
         quoteProjectPath: Boolean = false,
+    ): String =
+        processPlaceholders(
+            content,
+            projectPath,
+            currentFile,
+            quoteProjectPath,
+            CommandProcessor::normalizeCommand,
+        )
+
+    /**
+     * The pipeline above with the normalize step injected, so tests can pin WHEN
+     * it runs on any host: [CommandProcessor.normalizeCommand] only rewrites
+     * separators on Windows, so on a POSIX CI host a test through the public
+     * overload cannot observe the ordering at all.
+     */
+    internal fun processPlaceholders(
+        content: String,
+        projectPath: String?,
+        currentFile: String?,
+        quoteProjectPath: Boolean,
+        normalizeCommand: (String) -> String,
     ): String {
-        // Normalize command separators for current platform on the template before value
-        // substitutions so that injected paths, files, or URLs containing " && " are not corrupted.
-        var result = CommandProcessor.normalizeCommand(content)
+        // Normalize command separators for the current platform (MUST be the
+        // FIRST step). Normalization is about the template's command structure -
+        // the ` && ` the author typed between commands - not about the
+        // substituted values, which are data: all four chars of ` && ` are legal
+        // in a Windows filename, and the blind whole-string replace turned a
+        // quoted path like `'C:\A && B\proj'` into the nonexistent
+        // `'C:\A ; B\proj'` (#1181).
+        var result = normalizeCommand(content)
 
         // One reading of "is there a project" for all three project placeholders. They used to
         // disagree about a blank path: {projectPath} treated it as absent, while the two below
