@@ -272,18 +272,19 @@ swapped the environment variable for a key of their own.
 
 ### `FLUCK_VAULT_BASE_URL`
 
-Ships unset, on `https://pcnwqamqdnsadranufjv.functions.supabase.co/fluck-vault`.
+Set to `https://api.risaboss.com/functions/v1/fluck-vault`, which is also the built-in default.
 
 **Not** the project-wide `PUBLIC_BASE_URL` that the sibling functions read. Edge secrets are set per
 project, not per function, and this one decides the token audience: sharing it would mean that
 pointing some other function at a custom domain silently invalidated every vault link the DGX had
 minted, with no failure visible anywhere except a page telling the owner their link is no longer
 valid. That is exactly what happened to the first link this function ever served, because
-`PUBLIC_BASE_URL` was already set for `fluck-oauth`. The custom domain `https://api.risaboss.com`
-comes later, and until the certificate and CAA records are in place and there is no dangling CNAME,
-minting links against it would point owners at a host that may not resolve and may be somebody
-else's (red team I3). When it lands, set this and mint with the new host in `aud`; tokens for the
-old host stop being accepted, which is the intended behaviour.
+`PUBLIC_BASE_URL` was already set for `fluck-oauth`.
+
+The custom domain `https://api.risaboss.com` is now live, so both this function and the DGX minter
+use it. Tokens minted for the old `*.functions.supabase.co` host are refused with an audience
+mismatch, which is the intended behaviour (red team I3). The DGX must hold the same value in its own
+`FLUCK_VAULT_BASE_URL`, or its links will never verify.
 
 ## Migration
 
@@ -332,9 +333,9 @@ supabase secrets set --project-ref pcnwqamqdnsadranufjv FLUCK_SEAL_PUBLIC_KEY='â
 supabase functions deploy fluck-vault --project-ref pcnwqamqdnsadranufjv
 
 # 4. Check it
-curl -s https://pcnwqamqdnsadranufjv.functions.supabase.co/fluck-vault/health
+curl -s https://api.risaboss.com/functions/v1/fluck-vault/health
 # {"ok":true,"configured":{"linkKey":true,"sealKey":true,"baseUrl":true}}
-curl -s https://pcnwqamqdnsadranufjv.functions.supabase.co/fluck-vault/pubkey
+curl -s https://api.risaboss.com/functions/v1/fluck-vault/pubkey
 ```
 
 ## Tests

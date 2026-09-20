@@ -53,7 +53,7 @@ import { looksSealed, sealPublicKey } from "./seal.ts"
 import { form, message } from "./page.ts"
 
 /**
- * Where the function answers when no custom domain is configured.
+ * Where the function answers.
  *
  * The variable is `FLUCK_VAULT_BASE_URL`, NOT the project-wide `PUBLIC_BASE_URL` the sibling
  * functions read. Edge secrets are set per project rather than per function, and this one
@@ -62,8 +62,7 @@ import { form, message } from "./page.ts"
  * anywhere except a page that says the link is no longer valid. Found the hard way, on the
  * first link this function ever served.
  */
-export const DEFAULT_PUBLIC_BASE_URL =
-  "https://pcnwqamqdnsadranufjv.functions.supabase.co/fluck-vault"
+export const DEFAULT_PUBLIC_BASE_URL = "https://api.risaboss.com/functions/v1/fluck-vault"
 
 /** How long a stored blob waits for the DGX to drain it, by purpose. Minutes. */
 export const INBOX_TTL_MINUTES: Record<Purpose, number> = { vault: 15, cvv: 10 }

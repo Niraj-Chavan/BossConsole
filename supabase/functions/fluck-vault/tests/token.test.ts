@@ -21,7 +21,7 @@ import {
   verifyLink,
 } from "../token.ts"
 
-const AUD = "pcnwqamqdnsadranufjv.functions.supabase.co"
+const AUD = "api.risaboss.com"
 const NOW = 1_800_000_000
 
 async function keys(): Promise<{ privateKey: CryptoKey; publicRaw: Uint8Array }> {
@@ -95,7 +95,10 @@ Deno.test("an expired token is refused at its own expiry", async () => {
 
 Deno.test("a token for another audience is refused", async () => {
   const { privateKey, publicRaw } = await keys()
-  const token = await mintLink(privateKey, vaultClaims({ aud: "api.risaboss.com" }))
+  const token = await mintLink(
+    privateKey,
+    vaultClaims({ aud: "pcnwqamqdnsadranufjv.functions.supabase.co" }),
+  )
   assertEquals(await verifyLink(publicRaw, token, AUD, NOW), null)
 })
 
