@@ -52,7 +52,16 @@ import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifySigned } from "./signed.ts"
 import { looksSealed, sealPublicKey } from "./seal.ts"
 import { form, message } from "./page.ts"
 
-/** Where the function answers when no custom domain is configured. */
+/**
+ * Where the function answers when no custom domain is configured.
+ *
+ * The variable is `FLUCK_VAULT_BASE_URL`, NOT the project-wide `PUBLIC_BASE_URL` the sibling
+ * functions read. Edge secrets are set per project rather than per function, and this one
+ * decides the token AUDIENCE: sharing it would mean that pointing another function at a custom
+ * domain silently invalidates every vault link the DGX has ever minted, with no failure
+ * anywhere except a page that says the link is no longer valid. Found the hard way, on the
+ * first link this function ever served.
+ */
 export const DEFAULT_PUBLIC_BASE_URL =
   "https://pcnwqamqdnsadranufjv.functions.supabase.co/fluck-vault"
 
@@ -365,7 +374,7 @@ export function looksLikePlaintext(value: string): boolean {
  *
  * Both prefixes are stripped because the edge runtime serves a function at
  * `/functions/v1/<name>` while a custom domain may map it at `/<name>` or at the root, and all
- * three have to be the same code. Which one is public is then purely `PUBLIC_BASE_URL`.
+ * three have to be the same code. Which one is public is then purely `FLUCK_VAULT_BASE_URL`.
  */
 export function routePath(pathname: string): string {
   const stripped = pathname
@@ -375,7 +384,7 @@ export function routePath(pathname: string): string {
 }
 
 function baseUrl(deps: Dependencies): string {
-  return (deps.env("PUBLIC_BASE_URL") || DEFAULT_PUBLIC_BASE_URL).replace(/\/+$/, "")
+  return (deps.env("FLUCK_VAULT_BASE_URL") || DEFAULT_PUBLIC_BASE_URL).replace(/\/+$/, "")
 }
 
 /** The audience a token must name: the HOST of the public base URL, not the whole thing. */

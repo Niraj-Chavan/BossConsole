@@ -24,7 +24,7 @@
  *   `"alias":"…"` (vault only, optional) `,"purchase_id":"…"` (cvv only) `,"aud":"…","iat":<s>,"exp":<s>}`
  * - signature: base64url(Ed25519(privateKey, `b64url(header).b64url(payload)`)), unpadded
  *
- * `aud` is the HOST of `PUBLIC_BASE_URL`, not the whole URL. It is checked, so a token minted
+ * `aud` is the HOST of `FLUCK_VAULT_BASE_URL`, not the whole URL. It is checked, so a token minted
  * for the functions URL cannot be replayed against a custom domain and, more to the point, a
  * dangling `api.risaboss.com` that someone else takes over cannot accept our tokens.
  * (Red team I3.)

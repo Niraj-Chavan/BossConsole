@@ -290,3 +290,34 @@ Deno.test("no log line from a signed route carries a full workspace id", async (
   assert(h.logs.length >= 2)
   for (const line of h.logs) assert(!line.includes(WS), line)
 })
+
+/**
+ * The audience comes from this function's OWN variable.
+ *
+ * Edge secrets are set per project. `PUBLIC_BASE_URL` was already set here for `fluck-oauth`,
+ * and while this function read it, every link it minted named an audience it then refused.
+ */
+Deno.test("the audience is not taken from the project-wide base url", async () => {
+  resetRateLimits()
+  const seen: string[] = []
+  const deps: Dependencies = {
+    env: (name) => {
+      seen.push(name)
+      if (name === "PUBLIC_BASE_URL") return "https://somebody-elses-host.example"
+      if (name === "FLUCK_LINK_PUBLIC_KEY") return LINK_PUBLIC
+      if (name === "FLUCK_SEAL_PUBLIC_KEY") return SEAL_PUBLIC
+      return undefined
+    },
+    now: () => NOW * 1000,
+    log: () => {},
+    describeRequest: () => Promise.resolve(null),
+    store: () => Promise.resolve({ outcome: "gone", kind: null }),
+    createRequest: () => Promise.resolve(true),
+    claimInbox: () => Promise.resolve([]),
+  }
+  const response = await createHandler(deps)(
+    new Request(`${DEFAULT_PUBLIC_BASE_URL}/health`),
+  )
+  assertEquals(response.status, 200)
+  assert(!seen.includes("PUBLIC_BASE_URL"), "the function read the project-wide base url")
+})

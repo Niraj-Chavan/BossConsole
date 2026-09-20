@@ -70,9 +70,9 @@ source, not of a runtime):
 ```
 
 - `kind` and `alias` appear on a `vault` link only, `purchase_id` on a `cvv` link only.
-- `aud` is the **host** of `PUBLIC_BASE_URL`, and it is checked. A token minted for the functions
-  URL cannot be replayed against a custom domain, and a dangling `api.risaboss.com` that somebody
-  else takes over cannot accept our tokens.
+- `aud` is the **host** of `FLUCK_VAULT_BASE_URL`, and it is checked. A token minted for the
+  functions URL cannot be replayed against a custom domain, and a dangling `api.risaboss.com` that
+  somebody else takes over cannot accept our tokens.
 - A vault link may live at most 10 minutes from its own `iat`, a CVV link at most 5. A token whose
   own lifetime exceeds the policy is refused even though it verifies, so a minting bug on the DGX
   cannot hand out a link that is good for a week.
@@ -250,7 +250,7 @@ Set with `supabase secrets set --project-ref pcnwqamqdnsadranufjv …`. `SUPABAS
 | ----------------------- | -------- | --------------------------------------------------------------------------- |
 | `FLUCK_LINK_PUBLIC_KEY` | yes      | Ed25519 **public** key, 32 raw bytes base64, or a PEM `PUBLIC KEY` block    |
 | `FLUCK_SEAL_PUBLIC_KEY` | yes      | P-256 **public** key, uncompressed point (65 bytes, leading `0x04`), base64 |
-| `PUBLIC_BASE_URL`       | no       | Defaults to the functions URL below. Its host is the token audience         |
+| `FLUCK_VAULT_BASE_URL`  | no       | Defaults to the functions URL below. Its host is the token audience         |
 
 Both are public keys. **Neither private half ever comes near this function or this project**, and a
 deployment that put one here would give away the two properties the design is built on.
@@ -270,13 +270,20 @@ After deploying, `GET /pubkey` echoes the sealing key the pages are actually bei
 against what you generated: that is how you learn, without trusting a deploy log, that nobody
 swapped the environment variable for a key of their own.
 
-### `PUBLIC_BASE_URL`
+### `FLUCK_VAULT_BASE_URL`
 
-Ships unset, on `https://pcnwqamqdnsadranufjv.functions.supabase.co/fluck-vault`. The custom domain
-`https://api.risaboss.com` comes later, and until the certificate and CAA records are in place and
-there is no dangling CNAME, minting links against it would point owners at a host that may not
-resolve and may be somebody else's (red team I3). When it lands, set this and mint with the new host
-in `aud`; tokens for the old host stop being accepted, which is the intended behaviour.
+Ships unset, on `https://pcnwqamqdnsadranufjv.functions.supabase.co/fluck-vault`.
+
+**Not** the project-wide `PUBLIC_BASE_URL` that the sibling functions read. Edge secrets are set per
+project, not per function, and this one decides the token audience: sharing it would mean that
+pointing some other function at a custom domain silently invalidated every vault link the DGX had
+minted, with no failure visible anywhere except a page telling the owner their link is no longer
+valid. That is exactly what happened to the first link this function ever served, because
+`PUBLIC_BASE_URL` was already set for `fluck-oauth`. The custom domain `https://api.risaboss.com`
+comes later, and until the certificate and CAA records are in place and there is no dangling CNAME,
+minting links against it would point owners at a host that may not resolve and may be somebody
+else's (red team I3). When it lands, set this and mint with the new host in `aud`; tokens for the
+old host stop being accepted, which is the intended behaviour.
 
 ## Migration
 
