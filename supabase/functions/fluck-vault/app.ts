@@ -39,7 +39,16 @@
  * A log line is the route, the purpose, eight characters of workspace id, the `jti`, and the
  * outcome. Never a body, never a claim, never a merchant, never anything typed on the page.
  */
-import { type Kind, type LinkClaims, publicKeyBytes, type Purpose, verifyLink } from "./token.ts"
+import {
+  type Kind,
+  type LinkClaims,
+  MAX_CVV_AGE_SECONDS,
+  MAX_VAULT_AGE_SECONDS,
+  publicKeyBytes,
+  type Purpose,
+  verifyLink,
+} from "./token.ts"
+import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifySigned } from "./signed.ts"
 import { looksSealed, sealPublicKey } from "./seal.ts"
 import { form, message } from "./page.ts"
 
@@ -78,6 +87,35 @@ export interface VaultRequestRow {
   currency: string | null
 }
 
+/** What the DGX asks this function to write when it mints a link. Non secret facts only. */
+export interface CreateRequest {
+  jti: string
+  ws: string
+  purpose: Purpose
+  kind: Kind | null
+  alias: string | null
+  purchaseId: string | null
+  merchant: string | null
+  brand: string | null
+  last4: string | null
+  totalCents: number | null
+  currency: string | null
+  /** Unix seconds. The token's own expiry, checked against the policy before it is written. */
+  expiresAt: number
+}
+
+/** One drained inbox row. `ciphertext` is base64; nothing here can open it. */
+export interface ClaimedItem {
+  id: string
+  jti: string
+  purpose: Purpose
+  kind: string | null
+  alias: string | null
+  purchaseId: string | null
+  ciphertext: string
+  createdAt: string
+}
+
 export interface StoreRequest {
   jti: string
   ciphertext: string
@@ -91,6 +129,10 @@ export interface Dependencies {
   describeRequest(jti: string): Promise<VaultRequestRow | null>
   /** Consume the request and stage the blob, in one statement. */
   store(request: StoreRequest): Promise<StoreResult>
+  /** Write the row for a link the DGX is about to sign. False if the id is already taken. */
+  createRequest(request: CreateRequest): Promise<boolean>
+  /** Return and delete every unclaimed row for one workspace, in one statement. */
+  claimInbox(ws: string): Promise<ClaimedItem[]>
   /** Milliseconds. Injected so the tests can sit on either side of an expiry. */
   now(): number
   log(line: string): void
@@ -366,6 +408,13 @@ export function createHandler(deps: Dependencies): (request: Request) => Promise
     const path = routePath(new URL(request.url).pathname)
     if (path === "/health") return health(deps)
     if (path === "/pubkey") return pubkey(deps)
+    if (path === "/requests" || path === "/inbox/claim") {
+      if (request.method !== "POST") {
+        await request.body?.cancel().catch(() => {})
+        return json(405, { error: "method" })
+      }
+      return await signedRoute(request, deps, path)
+    }
     if (path === "/vault" || path === "/cvv") {
       const purpose: Purpose = path === "/vault" ? "vault" : "cvv"
       if (request.method === "GET") return await get(request, deps, purpose)
@@ -665,4 +714,164 @@ async function post(request: Request, deps: Dependencies, purpose: Purpose): Pro
  */
 function clearSiteData(): Record<string, string> {
   return { "Clear-Site-Data": '"cache", "storage"' }
+}
+
+// --------------------------------------------------------------------------------------------
+// The DGX's own routes
+// --------------------------------------------------------------------------------------------
+
+/** Machine answers. No page, no copy, nothing to unfurl, nothing to read off a failure. */
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+  })
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * `POST /requests` and `POST /inbox/claim`, both proving themselves with a detached Ed25519
+ * signature over the raw body rather than with a Supabase credential the DGX would otherwise
+ * have to hold. See signed.ts for why.
+ */
+async function signedRoute(
+  request: Request,
+  deps: Dependencies,
+  path: string,
+): Promise<Response> {
+  const body = await request.text()
+  const nowSeconds = Math.floor(deps.now() / 1000)
+
+  if (!hit(`ip:${clientAddress(request)}`, IP_LIMIT, IP_WINDOW_MS, deps.now())) {
+    deps.log(`signed limited: ip`)
+    return json(429, { error: "busy" })
+  }
+  const ok = await verifySigned({
+    publicKey: deps.env("FLUCK_LINK_PUBLIC_KEY"),
+    method: "POST",
+    path,
+    body,
+    timestamp: request.headers.get(TIMESTAMP_HEADER),
+    signature: request.headers.get(SIGNATURE_HEADER),
+    nowSeconds,
+  })
+  if (!ok) {
+    // One answer for a bad signature, a stale timestamp and a missing header alike.
+    deps.log(`signed refused: ${path}`)
+    return json(401, { error: "unauthorized" })
+  }
+
+  let parsed: unknown
+  try {
+    parsed = body.length === 0 ? {} : JSON.parse(body)
+  } catch {
+    return json(400, { error: "body" })
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return json(400, { error: "body" })
+  }
+
+  return path === "/requests"
+    ? await createRequestRoute(deps, parsed as Record<string, unknown>, nowSeconds)
+    : await claimRoute(deps, parsed as Record<string, unknown>)
+}
+
+function optionalString(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return null
+  if (typeof value !== "string" || value.length === 0 || value.length > 200) return undefined
+  return value
+}
+
+/**
+ * Write the row for a link the DGX is about to sign.
+ *
+ * The policy ceilings are checked HERE as well as on the DGX. A minting bug that asked for a
+ * week long link would otherwise write a row that outlives every token that could reach it, and
+ * `verifyLink` would be the only thing standing between that row and a link good for a week.
+ * Two checks of the same rule, on either side of the wire, is the point.
+ */
+async function createRequestRoute(
+  deps: Dependencies,
+  body: Record<string, unknown>,
+  nowSeconds: number,
+): Promise<Response> {
+  const jti = typeof body.jti === "string" ? body.jti : ""
+  if (!UUID_PATTERN.test(jti)) return json(400, { error: "jti" })
+
+  const ws = typeof body.ws === "string" ? body.ws : ""
+  if (ws.length === 0 || ws.length > 200) return json(400, { error: "ws" })
+
+  const purpose = body.purpose
+  if (purpose !== "vault" && purpose !== "cvv") return json(400, { error: "purpose" })
+
+  const kind = purpose === "vault" ? body.kind : null
+  if (purpose === "vault" && kind !== "password" && kind !== "card") {
+    return json(400, { error: "kind" })
+  }
+
+  const expiresAt = body.expiresAt
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
+    return json(400, { error: "expiresAt" })
+  }
+  const maxAge = purpose === "vault" ? MAX_VAULT_AGE_SECONDS : MAX_CVV_AGE_SECONDS
+  if (expiresAt <= nowSeconds || expiresAt - nowSeconds > maxAge) {
+    return json(400, { error: "expiresAt" })
+  }
+
+  const alias = optionalString(body.alias)
+  const purchaseId = optionalString(body.purchaseId)
+  const merchant = optionalString(body.merchant)
+  const brand = optionalString(body.brand)
+  const last4 = optionalString(body.last4)
+  const currency = optionalString(body.currency)
+  for (const value of [alias, purchaseId, merchant, brand, last4, currency]) {
+    if (value === undefined) return json(400, { error: "field" })
+  }
+  if (last4 !== null && !/^[0-9]{4}$/.test(last4 as string)) return json(400, { error: "last4" })
+  if (currency !== null && !/^[A-Z]{3}$/.test(currency as string)) {
+    return json(400, { error: "currency" })
+  }
+  if (purpose === "cvv" && purchaseId === null) return json(400, { error: "purchase" })
+  if (purpose === "vault" && purchaseId !== null) return json(400, { error: "purchase" })
+
+  const totalCents = body.totalCents
+  if (totalCents !== undefined && totalCents !== null) {
+    if (typeof totalCents !== "number" || !Number.isInteger(totalCents) || totalCents < 0) {
+      return json(400, { error: "total" })
+    }
+  }
+
+  const created = await deps.createRequest({
+    jti,
+    ws,
+    purpose,
+    kind: (kind as Kind) ?? null,
+    alias: alias as string | null,
+    purchaseId: purchaseId as string | null,
+    merchant: merchant as string | null,
+    brand: brand as string | null,
+    last4: last4 as string | null,
+    totalCents: typeof totalCents === "number" ? totalCents : null,
+    currency: currency as string | null,
+    expiresAt,
+  })
+  if (!created) {
+    deps.log(`requests refused: taken [${workspacePrefix(ws)}] [${jti}]`)
+    return json(409, { error: "taken" })
+  }
+  deps.log(`requests created [${workspacePrefix(ws)}] [${jti}]`)
+  return json(201, { ok: true })
+}
+
+/** Drain one workspace's queue. The rows are deleted by the same statement that returns them. */
+async function claimRoute(
+  deps: Dependencies,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  const ws = typeof body.ws === "string" ? body.ws : ""
+  if (ws.length === 0 || ws.length > 200) return json(400, { error: "ws" })
+  const items = await deps.claimInbox(ws)
+  deps.log(`inbox claimed [${workspacePrefix(ws)}] [${items.length}]`)
+  return json(200, { items })
 }

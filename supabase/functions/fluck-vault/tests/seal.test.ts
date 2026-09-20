@@ -192,3 +192,68 @@ Deno.test("a malformed sealing public key is refused rather than served to a pag
     assert(threw, `expected a throw for ${String(bad).slice(0, 8)}`)
   }
 })
+
+/**
+ * The committed cross language vector.
+ *
+ * `tests/fixtures/seal-vector.json` is opened here and, byte for byte the same file, by
+ * `VaultSealVectorTest` in the plugin repo. That is what makes "the Kotlin side implements the
+ * same scheme" a fact rather than two readings of the same prose. The key pair in it is a
+ * throwaway generated once for this purpose and opens nothing.
+ */
+Deno.test("the committed vector opens, and is the one the Kotlin side reads", async () => {
+  const vector = JSON.parse(
+    await Deno.readTextFile(new URL("./fixtures/seal-vector.json", import.meta.url)),
+  )
+  const priv = await crypto.subtle.importKey(
+    "pkcs8",
+    decodeVector(vector.recipientPrivateKeyPkcs8Base64) as BufferSource,
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    ["deriveBits"],
+  )
+  const blob = decodeVector(vector.sealedBase64)
+  assertEquals(blob[0], SEAL_VERSION)
+  const ephemeral = await crypto.subtle.importKey(
+    "raw",
+    blob.slice(1, 66) as BufferSource,
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    [],
+  )
+  const shared = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: "ECDH", public: ephemeral }, priv, 256),
+  )
+  const hk = await crypto.subtle.importKey("raw", shared as BufferSource, "HKDF", false, [
+    "deriveBits",
+  ])
+  const keyBytes = await crypto.subtle.deriveBits(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: new Uint8Array(32) as BufferSource,
+      info: new TextEncoder().encode(SEAL_INFO_PREFIX + vector.jti) as BufferSource,
+    },
+    hk,
+    256,
+  )
+  const aes = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"])
+  const plain = await crypto.subtle.decrypt(
+    {
+      name: "AES-GCM",
+      iv: blob.slice(66, 78) as BufferSource,
+      additionalData: new TextEncoder().encode(vector.jti) as BufferSource,
+      tagLength: 128,
+    },
+    aes,
+    blob.slice(78) as BufferSource,
+  )
+  assertEquals(new TextDecoder().decode(plain), vector.plaintext)
+})
+
+function decodeVector(value: string): Uint8Array {
+  const binary = atob(value)
+  const out = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i)
+  return out
+}

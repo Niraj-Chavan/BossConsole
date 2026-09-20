@@ -132,6 +132,9 @@ function harness(options: {
       stored.push(request)
       return Promise.resolve(options.result ?? { outcome: "stored", kind: "card" })
     },
+    // The DGX routes have their own suite; here they only have to exist.
+    createRequest: () => Promise.resolve(true),
+    claimInbox: () => Promise.resolve([]),
   }
   return { handler: createHandler(deps), described, stored, logs }
 }

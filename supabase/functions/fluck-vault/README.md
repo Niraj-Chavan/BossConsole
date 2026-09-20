@@ -17,14 +17,16 @@ consequence of it or a guard around the link that reaches the page.
 
 ## Routes
 
-| Route           | Auth              | What it does                                                       |
-| --------------- | ----------------- | ------------------------------------------------------------------ |
-| `GET /vault?t=` | the signed link   | Renders the password or card form. Consumes nothing                |
-| `POST /vault`   | the device cookie | Consumes the link and stages the sealed value                      |
-| `GET /cvv?t=`   | the signed link   | One security code, showing brand, last four, total and merchant    |
-| `POST /cvv`     | the device cookie | Same, with a shorter time to live                                  |
-| `GET /health`   | none              | `{ ok, configured: { linkKey, sealKey, baseUrl } }`, booleans only |
-| `GET /pubkey`   | none              | The sealing public key, so the DGX can check what pages were given |
+| Route               | Auth              | What it does                                                       |
+| ------------------- | ----------------- | ------------------------------------------------------------------ |
+| `GET /vault?t=`     | the signed link   | Renders the password or card form. Consumes nothing                |
+| `POST /vault`       | the device cookie | Consumes the link and stages the sealed value                      |
+| `GET /cvv?t=`       | the signed link   | One security code, showing brand, last four, total and merchant    |
+| `POST /cvv`         | the device cookie | Same, with a shorter time to live                                  |
+| `POST /requests`    | the DGX signature | Writes the request row for a link the DGX is about to sign         |
+| `POST /inbox/claim` | the DGX signature | Returns and deletes a workspace's unclaimed sealed values          |
+| `GET /health`       | none              | `{ ok, configured: { linkKey, sealKey, baseUrl } }`, booleans only |
+| `GET /pubkey`       | none              | The sealing public key, so the DGX can check what pages were given |
 
 `verify_jwt = false` in `supabase/config.toml`, and it must be: the caller is a phone browser
 following a link that arrived by text and carries no header we chose.
@@ -159,28 +161,60 @@ blob or that looks like a card number. That is a second line of defence, for the
 script did not run at all: an old browser, an extension, a CSP mistake of ours. It matters because
 Supabase request body logging is platform side and not fully under our control (red team C5).
 
-## The DGX polling contract
+## The DGX contract
 
-Minting a link is two steps, and the row comes first:
+**The DGX holds no Supabase credential.** An earlier draft of this document had it call
+`fluck_vault_claim` directly with the project's service role key. That key opens the whole project,
+and the box it would sit on also runs a model, so a compromise of the DGX would have become a
+compromise of everything rather than of a queue of blobs plus one private key. Instead the DGX
+proves itself with the Ed25519 key it already has to hold in order to sign links, and this function
+is the only thing in the system with a service role key.
 
-1. Insert a `public.fluck_vault_requests` row with `id` equal to the `jti` you are about to sign,
-   the workspace, the purpose, and whatever the page should say out loud (`merchant`, `brand`,
-   `last4`, `total_cents`, `currency` for a CVV link). Set `expires_at` to the token's own expiry.
-2. Sign the token and text `https://<base>/vault?t=…` or `https://<base>/cvv?t=…`.
+The asymmetry still points the right way: this end can verify a DGX request and cannot forge one,
+exactly as it can verify a link and cannot mint one.
 
-Collecting is one call, as `service_role`, over HTTPS:
+### The signature
 
-```sh
-curl -sX POST "$SUPABASE_URL/rest/v1/rpc/fluck_vault_claim" \
-  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
-  -H 'Content-Type: application/json' -d '{"p_ws":"ws-…"}'
+A detached Ed25519 signature over a canonical string, never over the parsed body, carried in two
+headers:
+
+```
+X-Fluck-Timestamp: <unix seconds>
+X-Fluck-Signature: base64url(Ed25519(privateKey, canonical)), unpadded
+
+canonical = "fluck-vault-signed-v1\n" + METHOD + "\n" + <routed path> + "\n"
+          + <unix seconds> + "\n" + <sha256 hex of the raw body>
 ```
 
-It returns and **deletes** every unclaimed row for that workspace in one statement, so the value
-exists in exactly one place at a time: in flight, or in the DGX's memory, never both. A poller that
-crashes between the two loses the value, and the owner retypes it. That is the correct trade for a
-CVV and it is the point of red team D6: a `SELECT` followed by a `DELETE` would leave the blob at
-rest until its TTL.
+The path is the **routed** path, so a signature cannot be replayed against the other route by moving
+the request between the function's three possible mount points. Freshness is a two minute window on
+the timestamp and nothing else: there is no nonce table, and neither route needs one. `/requests` is
+keyed by a `jti` the DGX chose, so a replay is a primary key conflict rather than a second link, and
+`/inbox/claim` deletes what it returns, so a replay collects an empty list.
+
+A bad signature, a stale timestamp and a missing header are all one `401 {"error":"unauthorized"}`.
+
+### Minting a link is two steps, and the row comes first
+
+1. `POST /requests` with `{jti, ws, purpose, kind, alias, expiresAt}` — plus `purchaseId`,
+   `merchant`, `brand`, `last4`, `totalCents`, `currency` for a CVV link. `expiresAt` is unix
+   seconds and is the token's own expiry; a lifetime longer than the policy for that purpose is
+   refused here **and** in `fluck_vault_create`, so a minting bug cannot write a row that outlives
+   every token that could reach it. `201` on success, `409` if the id is already taken.
+2. Sign the token and text `https://<base>/vault?t=…` or `https://<base>/cvv?t=…`.
+
+### Collecting
+
+`POST /inbox/claim` with `{ws}` returns
+`{items: [{id, jti, purpose, kind, alias, purchaseId,
+ciphertext, createdAt}]}`, `ciphertext`
+base64.
+
+Behind it, `fluck_vault_claim` returns and **deletes** every unclaimed row for that workspace in one
+statement, so the value exists in exactly one place at a time: in flight, or in the DGX's memory,
+never both. A poller that crashes between the two loses the value, and the owner retypes it. That is
+the correct trade for a CVV and it is the point of red team D6: a `SELECT` followed by a `DELETE`
+would leave the blob at rest until its TTL.
 
 `ciphertext` comes back as `\x…` hex from PostgREST. Decode it, open it, use it, and let it go.
 
@@ -246,8 +280,9 @@ in `aud`; tokens for the old host stop being accepted, which is the intended beh
 
 ## Migration
 
-`supabase/migrations/20260920100000_fluck_vault.sql` creates two tables and three functions. All
-three functions are `SECURITY DEFINER` with an empty `search_path`, and EXECUTE is revoked from
+`supabase/migrations/20260920100000_fluck_vault.sql` creates two tables and three functions, and
+`supabase/migrations/20260921100000_fluck_vault_create.sql` adds the fourth, `fluck_vault_create`.
+All three functions are `SECURITY DEFINER` with an empty `search_path`, and EXECUTE is revoked from
 `anon` and `authenticated` explicitly rather than merely left ungranted, because PUBLIC gets EXECUTE
 on a new function by default.
 
@@ -257,6 +292,7 @@ on a new function by default.
 | `fluck_vault_inbox`    | Sealed values waiting to be collected. Ciphertext only             |
 | `fluck_vault_describe` | The display facts for one live link. Consumes nothing              |
 | `fluck_vault_store`    | Consumes the link and stages the blob, in one transaction          |
+| `fluck_vault_create`   | Writes the row for a link the DGX is about to sign                 |
 | `fluck_vault_claim`    | Returns and deletes a workspace's unclaimed rows, in one statement |
 
 RLS is on with no policies on both tables, so every role is denied and `service_role` bypasses RLS.
@@ -302,7 +338,7 @@ deno task test    # deno test --allow-env --allow-read
 deno task check   # deno fmt --check && deno check index.ts tests/*.test.ts
 ```
 
-58 cases in four files.
+73 cases in five files.
 
 | File             | What it covers                                                                            |
 | ---------------- | ----------------------------------------------------------------------------------------- |
@@ -310,6 +346,7 @@ deno task check   # deno fmt --check && deno check index.ts tests/*.test.ts
 | `seal.test.ts`   | The scheme sealed and opened, the byte layout, jti and recipient binding, the blob check  |
 | `script.test.ts` | The real inline script run against a fake DOM, decrypted with the recipient private key   |
 | `vault.test.ts`  | Routing, non consuming GET, unfurler 204, cookie binding, CSP, replay, plaintext, limits  |
+| `signed.test.ts` | The DGX routes: tampered body, wrong key, stale timestamp, moved route, field checks      |
 
 `script.test.ts` exists because the page's script is a **string**, so `deno check` never looks at it
 and a typo in it would fail nowhere: the symptom would be a card typed at a checkout that silently
