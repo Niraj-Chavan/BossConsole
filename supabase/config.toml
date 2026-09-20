@@ -427,3 +427,14 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/fluck-oauth/deno.json"
 entrypoint = "./functions/fluck-oauth/index.ts"
+
+[functions.fluck-vault]
+enabled = true
+# MUST be false: the caller is a phone browser opening a link that arrived by text, carrying no
+# Authorization header and no apikey. Its gate is the `t` parameter, an Ed25519 token the DGX
+# signs and this function can only VERIFY, single use through `public.fluck_vault_store`, and
+# bound to the device by a cookie the first GET sets. The function holds no key that opens
+# anything it stores: the page seals the value in the browser to the DGX public key.
+verify_jwt = false
+import_map = "./functions/fluck-vault/deno.json"
+entrypoint = "./functions/fluck-vault/index.ts"
