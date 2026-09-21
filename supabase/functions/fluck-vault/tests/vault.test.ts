@@ -233,6 +233,11 @@ Deno.test("a browser GET renders the card form and consumes nothing", async () =
   assertStringIncludes(html, PAGES.cardTitle)
   assertStringIncludes(html, `data-jti="${JTI}"`)
   assertStringIncludes(html, `data-key="${SEAL_PUBLIC}"`)
+  // R1: the card form cannot be filled in without the virtual-card attestation and a limit.
+  assertStringIncludes(html, 'name="f8" type="checkbox" required')
+  assertStringIncludes(html, "virtual card with a spending limit")
+  assertStringIncludes(html, 'name="f9"')
+  assertStringIncludes(html, 'name="f10"')
   assertEquals(described, [JTI])
   assertEquals(stored.length, 0)
 })

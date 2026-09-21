@@ -116,7 +116,7 @@ The plaintext is compact JSON, and the DGX is its only reader and only validator
 
 ```json
 {"kind":"password","username":"…","password":"…"}
-{"kind":"card","name":"…","pan":"…","exp":"MM/YY","billing":{"line1":"…","city":"…","postal":"…","country":"…"}}
+{"kind":"card","name":"…","pan":"…","exp":"MM/YY","virtual":true,"limit_minor":20000,"currency":"USD","billing":{"line1":"…","city":"…","postal":"…","country":"…"}}
 {"kind":"cvv","cvv":"123"}
 ```
 
@@ -151,10 +151,15 @@ plus `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag: n
 `X-Content-Type-Options: nosniff` and HSTS on every response, and `Clear-Site-Data` on the success
 page so the back button cannot bring a filled field back onto the screen.
 
-The script validates locally (Luhn on the card number, `MM/YY` on the expiry, three or four digits
-on the code), seals, **disables every plaintext input so the browser cannot serialise it**, and
-posts the blob and the `jti`. Fields are named `f1` to `f7` rather than `cardnumber`, so nothing
-recognises them by name.
+The card form carries a required "This is a virtual card with a spending limit" checkbox and a
+required limit amount and currency, and the script refuses to seal a card without them. Only a
+virtual, low-limit card is ever added: the DGX refuses a card blob that does not carry the
+attestation, so the checkbox is a prompt for the owner rather than a control of its own.
+
+The script validates locally (Luhn on the card number, `MM/YY` on the expiry, the attestation and a
+positive limit, three or four digits on the code), seals, **disables every plaintext input so the
+browser cannot serialise it**, and posts the blob and the `jti`. Fields are named `f1` to `f7`
+rather than `cardnumber`, so nothing recognises them by name.
 
 The server refuses any body field beyond `c` and `j`, and refuses a `c` that is not a well formed
 blob or that looks like a card number. That is a second line of defence, for the case where the
@@ -346,7 +351,7 @@ deno task test    # deno test --allow-env --allow-read
 deno task check   # deno fmt --check && deno check index.ts tests/*.test.ts
 ```
 
-73 cases in five files.
+79 cases in five files.
 
 | File             | What it covers                                                                            |
 | ---------------- | ----------------------------------------------------------------------------------------- |

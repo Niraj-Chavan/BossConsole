@@ -20,11 +20,12 @@ const JTI = "11111111-2222-3333-4444-555555555555"
 
 interface Field {
   value: string
+  checked: boolean
   disabled: boolean
 }
 
 interface Harness {
-  submit: (values: Record<string, string>) => Promise<void>
+  submit: (values: Record<string, string | boolean>) => Promise<void>
   ciphertext: () => string
   error: () => string
   submitted: () => number
@@ -40,8 +41,8 @@ interface Harness {
  */
 function page(kind: string, sealKey: string): Harness {
   const fields: Record<string, Field> = {}
-  for (const name of ["f1", "f2", "f3", "f4", "f5", "f6", "f7"]) {
-    fields[name] = { value: "", disabled: false }
+  for (const name of ["f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10"]) {
+    fields[name] = { value: "", checked: false, disabled: false }
   }
   const out = { value: "" }
   const err = { textContent: "" }
@@ -98,7 +99,10 @@ function page(kind: string, sealKey: string): Harness {
      * than fail it.
      */
     submit(values) {
-      for (const [name, value] of Object.entries(values)) fields[name].value = value
+      for (const [name, value] of Object.entries(values)) {
+        if (typeof value === "boolean") fields[name].checked = value
+        else fields[name].value = value
+      }
       let timer: number | ReturnType<typeof setTimeout> = 0
       const done = new Promise<void>((resolve) => {
         settle = () => {
@@ -175,6 +179,9 @@ Deno.test("the page seals a card the DGX key opens", async () => {
     f5: "Town",
     f6: "12345",
     f7: "US",
+    f8: true,
+    f9: "200",
+    f10: "usd",
   })
   assertEquals(harness.submitted(), 1)
   assertEquals(JSON.parse(await open(privateKey, JTI, harness.ciphertext())), {
@@ -183,8 +190,52 @@ Deno.test("the page seals a card the DGX key opens", async () => {
     // Normalised: the owner types spaces and the DGX gets digits.
     pan: "4111111111111111",
     exp: "04/29",
+    virtual: true,
+    limit_minor: 20000,
+    currency: "USD",
     billing: { line1: "1 Street", city: "Town", postal: "12345", country: "US" },
   })
+})
+
+Deno.test("a card with no virtual-card attestation and no limit is refused in the browser", async () => {
+  const { base64 } = await recipient()
+
+  const unattested = page("card", base64)
+  await unattested.submit({
+    f1: "A Person",
+    f2: "4242424242424242",
+    f3: "04/29",
+    f6: "12345",
+    f9: "200",
+    f10: "USD",
+  })
+  assertEquals(unattested.submitted(), 0)
+  assertStringIncludes(unattested.error(), "virtual card")
+
+  const nolimit = page("card", base64)
+  await nolimit.submit({
+    f1: "A Person",
+    f2: "4242424242424242",
+    f3: "04/29",
+    f6: "12345",
+    f8: true,
+    f10: "USD",
+  })
+  assertEquals(nolimit.submitted(), 0)
+  assertStringIncludes(nolimit.error(), "spending limit")
+
+  const badCurrency = page("card", base64)
+  await badCurrency.submit({
+    f1: "A Person",
+    f2: "4242424242424242",
+    f3: "04/29",
+    f6: "12345",
+    f8: true,
+    f9: "200",
+    f10: "dollars",
+  })
+  assertEquals(badCurrency.submitted(), 0)
+  assertStringIncludes(badCurrency.error(), "three letters")
 })
 
 Deno.test("the page seals a password and a cvv", async () => {

@@ -156,7 +156,8 @@ const COPY = {
   passwordSubmit: "Save",
   passwordNote: "It is encrypted in this browser before it is sent.",
   cardTitle: "Add a card",
-  cardIntro: "Type the card once here. Fluck never sees it in Messages.",
+  cardIntro:
+    "Type the card once here. Fluck never sees it in Messages. Use a virtual card with a spending limit.",
   cardSubmit: "Add card",
   cardNote: "It is encrypted in this browser before it is sent.",
   cvvTitle: "Confirm your payment",
@@ -679,6 +680,9 @@ async function post(request: Request, deps: Dependencies, purpose: Purpose): Pro
     body = await request.formData()
   } catch {
     await request.body?.cancel().catch(() => {})
+    // Named, because this catch fires for a body that is not a form at all and a silent 400
+    // here is indistinguishable from a bad jti when somebody is standing at a checkout.
+    deps.log(`${purpose} refused: body`)
     return await message(400, COPY.badTitle, COPY.bad)
   }
 
