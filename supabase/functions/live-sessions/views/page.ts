@@ -81,7 +81,8 @@ const STYLES = `
   footer { margin-top: 28px; color: var(--text-2); font-size: 12px; text-align: center; }
   a { color: var(--signal-text); }
   /* Embedded viewer: the page becomes a thin bar over a full-height frame. */
-  body.viewing main { max-width: none; padding: 0; height: 100vh; display: flex; flex-direction: column; }
+  body.viewing { overflow: hidden; }
+  body.viewing main { max-width: none; padding: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
   body.viewing header, body.viewing #notice, body.viewing .card, body.viewing footer { display: none; }
   #viewer { display: none; flex: 1; flex-direction: column; min-height: 0; }
   body.viewing #viewer { display: flex; }
@@ -193,6 +194,26 @@ const SCRIPT = `
   // this page and "back" is instant. The host allows framing only for the account link and only
   // by this origin; the frame tells us when the session ends (see onFrameMessage).
   var viewing = null; // { url, label }
+  // The on-screen keyboard is only visible to the TOP document: on iOS the layout viewport
+  // never shrinks, only window.visualViewport does, and a cross-origin iframe sees neither. The
+  // viewer pins its key bar to ITS bottom edge, so while a session is embedded the page sizes
+  // <main> to the visual viewport and follows its offset; the frame's bottom then sits just above
+  // the keyboard and the bar rides it, exactly as when Android resizes a window. Android already
+  // shrinks the window, where this is a harmless no-op.
+  function fitViewport() {
+    var m = document.querySelector("main");
+    if (!viewing) { m.style.height = ""; m.style.transform = ""; return; }
+    var vv = window.visualViewport;
+    if (!vv) { m.style.height = window.innerHeight + "px"; m.style.transform = ""; return; }
+    m.style.height = Math.round(vv.height) + "px";
+    m.style.transform = vv.offsetTop ? "translateY(" + Math.round(vv.offsetTop) + "px)" : "";
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", fitViewport);
+    window.visualViewport.addEventListener("scroll", fitViewport);
+  }
+  window.addEventListener("resize", fitViewport);
+
   function openSession(url, label) {
     if (viewing) return;
     viewing = { url: url, label: label };
@@ -202,6 +223,7 @@ const SCRIPT = `
     $("viewer-newtab").setAttribute("href", url);
     $("viewerframe").setAttribute("src", url);
     document.body.classList.add("viewing");
+    fitViewport();
     try { history.pushState({ view: "session" }, "", location.pathname + location.search); } catch (_) {}
   }
   function closeSession(reasonText) {
@@ -209,6 +231,7 @@ const SCRIPT = `
     viewing = null;
     $("viewerframe").setAttribute("src", "about:blank");
     document.body.classList.remove("viewing");
+    fitViewport();
     cancelledAutoOpen = true; // do not bounce straight back into a session that just ended
     if (reasonText) notice(reasonText, null);
     loadSessions(false).catch(function () {});
