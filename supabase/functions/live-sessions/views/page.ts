@@ -137,9 +137,16 @@ const SCRIPT = `
     var h = Math.round(m / 60); if (h < 48) return h + " h ago";
     return Math.round(h / 24) + " d ago";
   }
+  // Tags the share link so the viewer knows to come back here when the session ends, instead
+  // of leaving a "you can close this tab" overlay. The tag is a fixed marker the viewer matches
+  // exactly; it never carries a URL. Query, not fragment: the fragment is the E2E secret.
   function safeHttpUrl(u) {
-    try { var x = new URL(u); return (x.protocol === "https:" || x.protocol === "http:") ? x.href : null; }
-    catch (_) { return null; }
+    try {
+      var x = new URL(u);
+      if (x.protocol !== "https:" && x.protocol !== "http:") return null;
+      x.searchParams.set("from", "live-sessions");
+      return x.href;
+    } catch (_) { return null; }
   }
 
   // The cookies are HttpOnly, so there is nothing to attach: same-origin credentials do it.
