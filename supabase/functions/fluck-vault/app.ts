@@ -286,33 +286,74 @@ function randomToken(): string {
 }
 
 /**
- * The device cookie for one link.
+ * One cookie NAME per link, which is the whole of the fix for the 2026-09-20 report.
  *
- * The value is `<jti>.<32 random bytes>` so a cookie set by one link cannot satisfy another:
- * the owner may have two links open, and the browser would otherwise send whichever cookie was
- * written last. `SameSite=Strict` is what stops a page on another origin from POSTing this form
- * with the owner's cookie attached, and `HttpOnly` keeps it away from any script at all,
- * including ours, which has no use for it.
+ * The value has always been `<jti>.<32 random bytes>`, and the comment here used to claim that
+ * was enough for two links at once — "the browser would otherwise send whichever cookie was
+ * written last". It is not. A single name at a single path holds exactly ONE value: the second
+ * link's GET does not sit alongside the first one's cookie, it REPLACES it. The `jti` prefix
+ * only makes the loss detectable, and what it detects is read as a refusal.
+ *
+ * That is exactly what the owner hit. Three links were texted 88 and 121 seconds apart, they
+ * opened more than one, typed into a page that was no longer the one holding the cookie, and
+ * got the fixed "this link is no longer valid" page with `no device cookie` in the log — for a
+ * link that was inside its ten minutes, unconsumed, and correctly signed.
+ *
+ * So the name carries the `jti` and every open link keeps its own binding. The ceiling on
+ * outstanding links is five, the lifetime is half an hour, and a POST clears its own, so the
+ * jar cannot grow without bound. `SameSite=Strict` still stops a page on another origin from
+ * POSTing this form with the owner's cookie attached — the submit is same-site, from our page
+ * to our origin, so Strict was never the thing in the way — and `HttpOnly` keeps it away from
+ * any script at all, including ours, which has no use for it.
  */
+export function cookieName(jti: string): string {
+  return `${COOKIE_NAME}_${jti}`
+}
+
 export function cookieValue(jti: string): string {
   return `${jti}.${randomToken()}`
 }
 
 export function setCookieHeader(jti: string, path: string): string {
-  return `${COOKIE_NAME}=${cookieValue(jti)}; Path=${path}; Max-Age=${COOKIE_MAX_AGE_SECONDS}` +
-    "; Secure; HttpOnly; SameSite=Strict"
+  return `${cookieName(jti)}=${cookieValue(jti)}; Path=${path}` +
+    `; Max-Age=${COOKIE_MAX_AGE_SECONDS}; Secure; HttpOnly; SameSite=Strict`
 }
 
+/** The header that retires one link's cookie. Same attributes, or a browser keeps the old one. */
+export function clearCookieHeader(jti: string): string {
+  return `${cookieName(jti)}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict`
+}
+
+/**
+ * This link's device cookie, or null.
+ *
+ * The bare `fv=` name is still read, because a page rendered by the previous deployment is
+ * sitting in somebody's browser right now with that cookie and its own value, and refusing it
+ * would turn this fix into a second outage for exactly the person it is for. It is still
+ * required to carry this link's `jti`, so it authorises nothing it did not already authorise.
+ */
 export function readCookie(request: Request, jti: string): string | null {
   const header = request.headers.get("cookie")
   if (!header) return null
+  const names = [cookieName(jti), COOKIE_NAME]
   for (const part of header.split(";")) {
     const trimmed = part.trim()
-    if (!trimmed.startsWith(`${COOKIE_NAME}=`)) continue
-    const value = trimmed.slice(COOKIE_NAME.length + 1)
+    const name = names.find((n) => trimmed.startsWith(`${n}=`))
+    if (!name) continue
+    const value = trimmed.slice(name.length + 1)
     if (value.startsWith(`${jti}.`) && value.length > jti.length + 1) return value
   }
   return null
+}
+
+/** Is there an `fv` cookie at all, for another link? A refusal reason, never a value. */
+export function hasForeignCookie(request: Request, jti: string): boolean {
+  const header = request.headers.get("cookie")
+  if (!header) return false
+  return header.split(";").some((part) => {
+    const trimmed = part.trim()
+    return trimmed.startsWith(`${COOKIE_NAME}=`) || trimmed.startsWith(`${COOKIE_NAME}_`)
+  }) && readCookie(request, jti) === null
 }
 
 /** SHA-256 hex. What is stored on consume, so the cookie itself is not at rest anywhere. */
@@ -676,7 +717,15 @@ async function post(request: Request, deps: Dependencies, purpose: Purpose): Pro
 
   const cookie = readCookie(request, jti)
   if (!cookie) {
-    deps.log(`${purpose} refused: no device cookie [${jti}]`)
+    // Two reason codes, because they were one and the distinction is the whole bug: a jar with
+    // no `fv` cookie in it is a browser that never rendered the form, and a jar holding ANOTHER
+    // link's cookie was, until this deployment, the ordinary result of opening two links.
+    // Neither logs a value.
+    deps.log(
+      hasForeignCookie(request, jti)
+        ? `${purpose} refused: device cookie for another link [${jti}]`
+        : `${purpose} refused: no device cookie [${jti}]`,
+    )
     return await message(400, COPY.badTitle, COPY.bad)
   }
 
@@ -706,6 +755,9 @@ async function post(request: Request, deps: Dependencies, purpose: Purpose): Pro
     ? await message(200, COPY.cardSavedTitle, COPY.cardSaved, clearSiteData())
     : await message(200, COPY.savedTitle, COPY.saved, clearSiteData())
   // The cookie has done its job and there is nothing left for it to authorise.
+  // Both names: the one this deployment sets, and the bare one a page from the previous
+  // deployment is still carrying. Clearing only the new name would leave the old one behind.
+  done.headers.append("Set-Cookie", clearCookieHeader(jti))
   done.headers.append(
     "Set-Cookie",
     `${COOKIE_NAME}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict`,

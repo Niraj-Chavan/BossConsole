@@ -10,6 +10,7 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert"
 import {
   COOKIE_NAME,
+  cookieName,
   createHandler,
   DEFAULT_PUBLIC_BASE_URL,
   type Dependencies,
@@ -180,8 +181,8 @@ function post(
   return new Request(`https://${AUD}/fluck-vault${path}`, { method: "POST", body: form, headers })
 }
 
-function cookieFrom(response: Response): string {
-  const header = response.headers.getSetCookie().find((c) => c.startsWith(`${COOKIE_NAME}=`))
+function cookieFrom(response: Response, jti: string = JTI): string {
+  const header = response.headers.getSetCookie().find((c) => c.startsWith(`${cookieName(jti)}=`))
   assert(header, "no device cookie was set")
   return header.split(";")[0]
 }
@@ -286,7 +287,8 @@ Deno.test("a GET sets a device cookie scoped to this link", async () => {
   const { handler } = harness()
   const response = await handler(get("/vault", await token()))
   const header = response.headers.getSetCookie()[0]
-  assertStringIncludes(header, `${COOKIE_NAME}=${JTI}.`)
+  // NAME as well as value: one name for every link is a jar that holds only the newest.
+  assertStringIncludes(header, `${cookieName(JTI)}=${JTI}.`)
   assertStringIncludes(header, "Secure")
   assertStringIncludes(header, "HttpOnly")
   assertStringIncludes(header, "SameSite=Strict")
@@ -349,9 +351,14 @@ Deno.test("an unconfigured function says so and renders no form", async () => {
 // The POST
 // ---------------------------------------------------------------------------------------------
 
-async function opened(h: Harness, path = "/vault", t?: string): Promise<string> {
+async function opened(
+  h: Harness,
+  path = "/vault",
+  t?: string,
+  jti: string = JTI,
+): Promise<string> {
   const response = await h.handler(get(path, t ?? await token()))
-  return cookieFrom(response)
+  return cookieFrom(response, jti)
 }
 
 Deno.test("a sealed POST with the device cookie is stored", async () => {
@@ -370,10 +377,69 @@ Deno.test("a sealed POST with the device cookie is stored", async () => {
 
 Deno.test("a cvv POST gets the shorter ttl and its own sentence", async () => {
   const h = harness({ row: cvvRow(), result: { outcome: "stored", kind: "cvv" } })
-  const cookie = await opened(h, "/cvv", await cvvToken())
+  const cookie = await opened(h, "/cvv", await cvvToken(), CVV_JTI)
   const response = await h.handler(post("/cvv", { j: CVV_JTI, c: blob() }, { cookie }))
   assertStringIncludes(await response.text(), PAGES.cvvDone)
   assertEquals(h.stored[0].ttlMinutes, 10)
+})
+
+/**
+ * The 2026-09-20 report, as a test.
+ *
+ * The owner was texted three links a minute and a half apart, opened more than one, filled in
+ * a page and submitted it. Under one cookie NAME for every link, the second GET replaced the
+ * first link's cookie and the first page's POST was refused with `no device cookie` — for a
+ * link that was signed, unexpired and unconsumed. A browser jar holds every cookie it has been
+ * set, so the test carries BOTH and asserts each page still posts.
+ */
+Deno.test("two links open at once both keep their binding", async () => {
+  const h = harness()
+  const first = await opened(h)
+  const secondJti = "99999999-8888-7777-6666-555555555555"
+  const secondResponse = await h.handler(get("/vault", await token({ jti: secondJti })))
+  const second = cookieFrom(secondResponse, secondJti)
+
+  // The names differ, which is the fix; under the old scheme these were the same name and the
+  // jar would have held only `second`.
+  assertEquals(first.split("=")[0], cookieName(JTI))
+  assertEquals(second.split("=")[0], cookieName(secondJti))
+
+  const jar = `${first}; ${second}`
+  const older = await h.handler(post("/vault", { j: JTI, c: blob() }, { cookie: jar }))
+  assertEquals(older.status, 200)
+  assertEquals(h.stored[0].jti, JTI)
+
+  resetRateLimits()
+  const newer = await h.handler(post("/vault", { j: secondJti, c: blob() }, { cookie: jar }))
+  assertEquals(newer.status, 200)
+  assertEquals(h.stored[1].jti, secondJti)
+})
+
+/** A page rendered by the previous deployment is in somebody's browser right now. */
+Deno.test("the legacy bare cookie from the previous deployment is still accepted", async () => {
+  const h = harness()
+  const cookie = await opened(h)
+  const legacy = `${COOKIE_NAME}=${cookie.split("=").slice(1).join("=")}`
+  const response = await h.handler(post("/vault", { j: JTI, c: blob() }, { cookie: legacy }))
+  assertEquals(response.status, 200)
+  assertEquals(h.stored.length, 1)
+})
+
+/** The refusal says WHICH of the two it was, and says it without a value. */
+Deno.test("a cookie for another link is logged apart from no cookie at all", async () => {
+  const h = harness()
+  const cookie = await opened(h)
+  const foreign = `${cookieName(CVV_JTI)}=${CVV_JTI}.${cookie.split(".")[1]}`
+
+  await h.handler(post("/vault", { j: JTI, c: blob() }, { cookie: foreign }))
+  resetRateLimits()
+  await h.handler(post("/vault", { j: JTI, c: blob() }))
+
+  assert(h.logs.some((l) => l.includes("refused: device cookie for another link")))
+  assert(h.logs.some((l) => l.endsWith(`refused: no device cookie [${JTI}]`)))
+  // Nothing logged carries a cookie value.
+  assert(h.logs.every((l) => !l.includes(cookie.split(".")[1])))
+  assertEquals(h.stored.length, 0)
 })
 
 Deno.test("a POST without the device cookie is refused and stores nothing", async () => {
@@ -505,7 +571,7 @@ Deno.test("an unknown route is a fixed page and a PUT is refused", async () => {
 
 Deno.test("no log line ever carries a body, a merchant or a full workspace id", async () => {
   const h = harness({ row: cvvRow(), result: { outcome: "stored", kind: "cvv" } })
-  const cookie = await opened(h, "/cvv", await cvvToken())
+  const cookie = await opened(h, "/cvv", await cvvToken(), CVV_JTI)
   await h.handler(post("/cvv", { j: CVV_JTI, c: blob() }, { cookie }))
   const joined = h.logs.join("\n")
   assert(joined.length > 0)
