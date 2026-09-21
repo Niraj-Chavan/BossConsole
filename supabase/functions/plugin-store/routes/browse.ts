@@ -254,6 +254,11 @@ browse.openapi(getPluginRoute, async (ctx) => {
 // GET /tags/popular - Get popular tags
 // ============================================================================
 
+// Same ceiling /search already enforces on pageSize. This route is public and sends the anon
+// key, and the value used to reach `LIMIT p_limit` in get_popular_tags with nothing bounding it
+// on the way - not here, not in getPopularTags, not in the SQL function.
+const POPULAR_TAGS_LIMIT_MAX = 100
+
 const popularTagsRoute = createRoute({
   method: 'get',
   path: '/tags/popular',
@@ -277,6 +282,14 @@ const popularTagsRoute = createRoute({
         }
       }
     },
+    400: {
+      description: 'Invalid limit',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema
+        }
+      }
+    },
     500: {
       description: 'Internal server error',
       content: {
@@ -291,7 +304,19 @@ const popularTagsRoute = createRoute({
 browse.openapi(popularTagsRoute, async (ctx) => {
   try {
     const supabase = ctx.get("supabase")
-    const { limit } = ctx.req.valid('query')
+    const { limit: rawLimit } = ctx.req.valid('query')
+
+    // Fail closed before anything touches the database. Two shapes got through before:
+    // an oversized integer, which asked for an arbitrarily large window, and a non-numeric
+    // value, which is worse - Number('abc') is NaN, JSON has no NaN so the RPC payload carries
+    // null, and PostgreSQL treats LIMIT NULL as LIMIT ALL. Number.isInteger rejects NaN,
+    // fractions and Infinity in one test.
+    const limit = Number(rawLimit)
+    if (!Number.isInteger(limit) || limit < 1 || limit > POPULAR_TAGS_LIMIT_MAX) {
+      return ctx.json({
+        error: `limit must be an integer from 1 to ${POPULAR_TAGS_LIMIT_MAX}`
+      }, 400)
+    }
 
     const tags = await getPopularTags(supabase, limit)
 
