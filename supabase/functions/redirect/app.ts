@@ -63,11 +63,11 @@ const BRANDS: Record<"boss" | "bossterm" | "web", Brand> = {
   web: {
     scheme: "https",
     tokenParam: "token",
-    name: "BOSS Live Sessions",
+    name: "BossTerm Live Sessions",
     tagline: "Your shared terminals, in the browser",
     appLabel: "Live Sessions",
-    footerLine: "BOSS Console - Business Operating System as Service",
-    copyright: "© 2025 BOSS. All rights reserved.",
+    footerLine: "BossTerm - by Risa Labs",
+    copyright: "© 2025 Risa Labs. All rights reserved.",
   },
   boss: {
     scheme: "boss",

@@ -119,7 +119,7 @@ Deno.test("live-sessions redirect_to → bounce to the GoTrue verify URL (no sch
   const conf = "https://api.risaboss.com/auth/v1/verify?token=tok123"
   const html = await pageFor(`/redirect?url=${encodeURIComponent(conf)}&type=magiclink&redirect_to=${encodeURIComponent(rt)}`)
   assertStringIncludes(html, "https://api.risaboss.com/auth/v1/verify?token=tok123&amp;type=magiclink&amp;redirect_to=" + encodeURIComponent(rt).replace(/&/g, "&amp;"))
-  assertStringIncludes(html, "<h1>BOSS Live Sessions</h1>")
+  assertStringIncludes(html, "<h1>BossTerm Live Sessions</h1>")
   assert(!html.includes("boss://auth/verify"), "must not deep-link the web flow into the desktop app")
 })
 

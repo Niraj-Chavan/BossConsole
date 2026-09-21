@@ -267,14 +267,14 @@ export function livePage(model: PageModel, nonce: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex, nofollow">
-<title>Live Sessions</title>
+<title>BossTerm Live Sessions</title>
 <style nonce="${esc(nonce)}">${STYLES}</style>
 </head>
 <body>
 <!--email_off-->
 <main>
   <header>
-    <div><h1>BOSS live sessions</h1><div class="sub">Terminal sessions shared from your signed-in BossTerm</div></div>
+    <div><h1>BossTerm live sessions</h1><div class="sub">Terminal sessions shared from BossTerm, signed in with your BOSS account</div></div>
     <div class="sub" id="who"></div>
   </header>
   ${notice}
