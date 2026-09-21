@@ -245,7 +245,7 @@ Deno.test("a browser GET renders the card form and consumes nothing", async () =
 Deno.test("a password link renders the password form", async () => {
   const { handler } = harness({ row: vaultRow({ kind: "password", alias: "airline" }) })
   const response = await handler(get("/vault", await token({ kind: "password" })))
-  assertStringIncludes(await response.text(), PAGES.passwordTitle)
+  assertStringIncludes(await response.text(), "Save your airline login")
 })
 
 Deno.test("the cvv page names the brand, the last four, the total and the merchant", async () => {
@@ -596,8 +596,8 @@ Deno.test("no log line ever carries a body, a merchant or a full workspace id", 
 })
 
 Deno.test("a password page names the site it is saving a login for", async () => {
-  const { handler } = harness({ row: { ...vaultRow(), alias: "united.com" } })
-  const response = await handler(get("/vault", await token()))
+  const { handler } = harness({ row: vaultRow({ kind: "password", alias: "united.com" }) })
+  const response = await handler(get("/vault", await token({ kind: "password" })))
   const html = await response.text()
   assertStringIncludes(html, "Save your united.com login")
   assertStringIncludes(html, "Type your united.com username and password once here.")
