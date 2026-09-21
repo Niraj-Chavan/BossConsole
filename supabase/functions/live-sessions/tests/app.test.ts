@@ -406,3 +406,48 @@ Deno.test("isSessionRow requires an http(s) control_url", () => {
   assert(!isSessionRow({ ...ROW, control_url: "javascript:alert(1)" }))
   assert(!isSessionRow({ ...ROW, control_url: undefined }))
 })
+
+Deno.test("LIVE_SESSIONS_PUBLIC_BASE_PATH=/ (vanity host) makes browser paths root-relative and cookies Path=/", withEnv(async () => {
+  Deno.env.set("LIVE_SESSIONS_PUBLIC_BASE_URL", "https://cli.risaboss.com")
+  Deno.env.set("LIVE_SESSIONS_PUBLIC_BASE_PATH", "/")
+  const stub = stubFetch((call) => call.url.endsWith("/auth/v1/user") ? json({ email: "a@b.c" }) : json({}))
+  try {
+    const page = await (await app.request(`${BASE}/`)).text()
+    assertStringIncludes(page, '"basePath":""')
+    const otp = await app.request(`${BASE}/api/otp`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "a@b.co" }),
+    })
+    assertEquals(otp.status, 200)
+    assertEquals(new URL(stub.calls[0].url).searchParams.get("redirect_to"), "https://cli.risaboss.com/auth")
+    const sess = await app.request(`${BASE}/api/session`, {
+      method: "POST", headers: { "Content-Type": "application/json", ...SECURE }, body: JSON.stringify({ access_token: fakeJwt("a@b.c") }),
+    })
+    assertStringIncludes(sess.headers.getSetCookie()[0], "Path=/;")
+  } finally {
+    stub.restore()
+    Deno.env.delete("LIVE_SESSIONS_PUBLIC_BASE_PATH")
+  }
+}))
+
+Deno.test("on a vanity host, page loads that did not come through the alias are redirected there; alias requests are served", withEnv(async () => {
+  Deno.env.set("LIVE_SESSIONS_PUBLIC_BASE_URL", "https://cli.risaboss.com")
+  Deno.env.set("LIVE_SESSIONS_PUBLIC_BASE_PATH", "/")
+  try {
+    const direct = await app.request(`${BASE}/auth?x=1`, { headers: { host: "api.risaboss.com" } })
+    assertEquals(direct.status, 302)
+    assertEquals(direct.headers.get("location"), "https://cli.risaboss.com/auth?x=1")
+    const viaAlias = await app.request(`${BASE}/auth`, { headers: { host: "api.risaboss.com", "x-live-sessions-alias": "cli.risaboss.com" } })
+    assertEquals(viaAlias.status, 200)
+    assertStringIncludes(await viaAlias.text(), 'id="signin-form"')
+    // API routes are never redirected: old pages keep working until they reload.
+    const api = await app.request(`${BASE}/api/sessions`, { headers: { host: "api.risaboss.com" } })
+    assertEquals(api.status, 401)
+  } finally {
+    Deno.env.delete("LIVE_SESSIONS_PUBLIC_BASE_PATH")
+  }
+}))
+
+Deno.test("without a vanity host configured, page loads are served wherever they arrive", withEnv(async () => {
+  const res = await app.request(`${BASE}/`, { headers: { host: "api.risaboss.com" } })
+  assertEquals(res.status, 200)
+}))

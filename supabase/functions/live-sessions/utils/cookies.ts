@@ -61,7 +61,7 @@ export function cookieToken(cookieHeader: string | null, name: string): string |
 }
 
 function setCookie(name: string, value: string, maxAge: number, secure: boolean, path: string): string {
-  const attrs = [`${name}=${value}`, `Path=${path}`, `Max-Age=${maxAge}`, "HttpOnly", "SameSite=Lax"]
+  const attrs = [`${name}=${value}`, `Path=${path || "/"}`, `Max-Age=${maxAge}`, "HttpOnly", "SameSite=Lax"]
   if (secure) attrs.push("Secure")
   return attrs.join("; ")
 }
@@ -79,7 +79,7 @@ export function sessionCookieHeaders(
 
 export function clearCookieHeaders(secure: boolean, path: string): string[] {
   return [accessCookieName(secure), refreshCookieName(secure)].map((name) => {
-    const attrs = [`${name}=`, `Path=${path}`, "Max-Age=0", "HttpOnly", "SameSite=Lax"]
+    const attrs = [`${name}=`, `Path=${path || "/"}`, "Max-Age=0", "HttpOnly", "SameSite=Lax"]
     if (secure) attrs.push("Secure")
     return attrs.join("; ")
   })

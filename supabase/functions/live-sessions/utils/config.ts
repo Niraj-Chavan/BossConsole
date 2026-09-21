@@ -16,6 +16,10 @@ const DEFAULT_BASE_PATH = "/functions/v1/live-sessions"
 export function publicBasePath(): string {
   const configured = Deno.env.get("LIVE_SESSIONS_PUBLIC_BASE_PATH")?.trim()
   const raw = configured && configured.length > 0 ? configured : DEFAULT_BASE_PATH
+  // "/" means "the site root": the vanity host cli.risaboss.com proxies its root onto this
+  // function, so browser-facing paths are just "/auth", "/api/...". Returned as "" so that
+  // `${publicBasePath()}/auth` stays well-formed; cookies.ts maps "" back to Path=/.
+  if (raw === "/") return ""
   const withSlash = raw.startsWith("/") ? raw : `/${raw}`
   return withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash
 }

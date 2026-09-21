@@ -76,11 +76,44 @@ function page(notice?: string): Response {
   return htmlResponse((nonce) => livePage({ basePath: publicBasePath(), liveWindowSeconds: LIVE_WINDOW_SECONDS, notice }, nonce))
 }
 
+/**
+ * When the page lives on a vanity host (LIVE_SESSIONS_PUBLIC_BASE_URL set to a host other than
+ * the one the function is reached on), a page load that did not come through the alias Worker
+ * is sent there, so cookies, links and the address bar all agree on one host. The Worker marks
+ * its requests with X-Live-Sessions-Alias. The URL fragment (the magic link's tokens) survives a
+ * 302 whose Location carries no fragment, so /auth landings on the old host still work.
+ */
+function aliasRedirect(ctx: { req: { url: string; header: (n: string) => string | undefined } }, route: string): Response | null {
+  const base = publicBaseUrl()
+  if (!base) return null
+  const baseHost = (() => {
+    try {
+      return new URL(base).host
+    } catch {
+      return ""
+    }
+  })()
+  const viaAlias = ctx.req.header("x-live-sessions-alias")
+  if (!baseHost || viaAlias === baseHost) return null
+  // Reached directly on the function's own host; only redirect if that host differs.
+  const reqHost = (ctx.req.header("x-forwarded-host") ?? ctx.req.header("host") ?? "").split(",")[0].trim()
+  // No host at all (tests, odd clients) or the vanity host itself: nothing to correct.
+  if (!reqHost || reqHost === baseHost) return null
+  const search = (() => {
+    try {
+      return new URL(ctx.req.url).search
+    } catch {
+      return ""
+    }
+  })()
+  return new Response(null, { status: 302, headers: { Location: `${base}${route}${search}`, "Cache-Control": "no-store" } })
+}
+
 // Both spellings: the gateway hands us `/live-sessions` for the bare URL and `/live-sessions/` when
 // the browser was given a trailing slash, and Hono matches them as different routes.
-app.get("/", () => page())
-app.get("", () => page())
-app.get("/auth", () => page())
+app.get("/", (ctx) => aliasRedirect(ctx, "") ?? page())
+app.get("", (ctx) => aliasRedirect(ctx, "") ?? page())
+app.get("/auth", (ctx) => aliasRedirect(ctx, "/auth") ?? page())
 
 app.get("/health", () => jsonResponse({ status: "healthy" }))
 

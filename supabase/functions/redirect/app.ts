@@ -106,6 +106,7 @@ const BOSSTERM_REDIRECT = "bossterm://auth/verify"
 // live-sessions/utils/config.ts DEFAULT_BASE_PATH (+ LIVE_SESSIONS_PUBLIC_BASE_URL), and both
 // email templates' `eq .RedirectTo` predicate.
 export const LIVE_SESSIONS_REDIRECTS: ReadonlySet<string> = new Set([
+  "https://cli.risaboss.com/auth", // vanity host: a Cloudflare Worker proxies it onto the function
   "https://api.risaboss.com/functions/v1/live-sessions/auth",
   "http://127.0.0.1:54321/functions/v1/live-sessions/auth", // local `supabase start` stack
 ])

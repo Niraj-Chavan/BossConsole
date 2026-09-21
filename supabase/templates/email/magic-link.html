@@ -10,7 +10,7 @@
   redirect_to=<functions>/live-sessions/auth; that email opens the browser page, not an app.
   Exact match (Go text/template has no hasPrefix); lockstep with redirect/app.ts and config.toml.
 */}}{{ $bossterm := eq .RedirectTo "bossterm://auth/verify" -}}
-{{ $web := eq .RedirectTo "https://api.risaboss.com/functions/v1/live-sessions/auth" -}}
+{{ $web := or (eq .RedirectTo "https://cli.risaboss.com/auth") (eq .RedirectTo "https://api.risaboss.com/functions/v1/live-sessions/auth") -}}
 <!DOCTYPE html>
 <html lang="en">
 <head>
