@@ -613,7 +613,9 @@ async function get(request: Request, deps: Dependencies, purpose: Purpose): Prom
   const sealKey = btoa(
     String.fromCharCode(...sealPublicKey(deps.env("FLUCK_SEAL_PUBLIC_KEY"))),
   )
-  const action = new URL(request.url).pathname
+  // The runtime sees `/fluck-vault/vault`; the phone must post to the public URL, or the
+  // gateway answers "requested path is invalid" before this code runs.
+  const action = `${baseUrl(deps)}${purpose === "cvv" ? "/cvv" : "/vault"}`
   const cookie = setCookieHeader(claims.jti, "/")
 
   const page = purpose === "cvv"

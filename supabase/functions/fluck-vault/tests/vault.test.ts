@@ -294,6 +294,15 @@ Deno.test("a GET sets a device cookie scoped to this link", async () => {
   assertStringIncludes(header, "SameSite=Strict")
 })
 
+Deno.test("the form posts to the public URL, not the path the runtime sees", async () => {
+  const { handler } = harness()
+  const response = await handler(get("/vault", await token()))
+  const html = await response.text()
+  // The runtime serves `/fluck-vault/vault`; a relative action posts there and the gateway
+  // answers "requested path is invalid" before the function ever runs.
+  assertStringIncludes(html, `action="${DEFAULT_PUBLIC_BASE_URL}/vault"`)
+})
+
 Deno.test("every GET carries the headers the page's safety depends on", async () => {
   const { handler } = harness()
   const response = await handler(get("/vault", await token()))
