@@ -27,36 +27,18 @@ export function publicPath(route: string): string {
 }
 
 /**
- * Absolute base URL for links that leave this function - here, the GoTrue
- * `redirect_to`. GoTrue allow-lists the EXACT value (config.toml
- * additional_redirect_urls), so LIVE_SESSIONS_PUBLIC_BASE_URL should be set in
- * production to the canonical `https://api.risaboss.com`; the request origin is
- * only a fallback for local stacks.
+ * Absolute base URL for the GoTrue `redirect_to`, from LIVE_SESSIONS_PUBLIC_BASE_URL only.
+ *
+ * There is deliberately NO fallback to the request's host. GoTrue exact-matches redirect_to
+ * against its allow-list and, on a miss, silently falls back to site_url (boss://auth/verify): the
+ * user would get a BOSS Console email whose token opens the desktop app instead of this page. And
+ * X-Forwarded-Host is caller-controlled, so a fallback would also let a request choose the value.
+ * Unset => null, and /api/otp answers 503 so the misconfiguration is loud.
  */
-export function publicBaseUrl(requestUrl: string, forwardedHost: string | null, secure: boolean): string {
+export function publicBaseUrl(): string | null {
   const configured = Deno.env.get("LIVE_SESSIONS_PUBLIC_BASE_URL")?.trim()
-  if (configured) return configured.replace(/\/+$/, "") + publicBasePath()
-
-  const host = forwardedHost?.split(",")[0]?.trim() ||
-    (() => {
-      try {
-        return new URL(requestUrl).host
-      } catch {
-        return ""
-      }
-    })()
-  const scheme = secure ? "https" : "http"
-  return host ? `${scheme}://${host}${publicBasePath()}` : publicBasePath()
-}
-
-/** True when the browser reached us over https (gateway terminates TLS, so read X-Forwarded-Proto). */
-export function isSecureRequest(requestUrl: string, forwardedProto: string | null): boolean {
-  if (forwardedProto) return forwardedProto.split(",")[0].trim().toLowerCase() === "https"
-  try {
-    return new URL(requestUrl).protocol === "https:"
-  } catch {
-    return false
-  }
+  if (!configured) return null
+  return configured.replace(/\/+$/, "") + publicBasePath()
 }
 
 export interface LiveSessionsConfig {

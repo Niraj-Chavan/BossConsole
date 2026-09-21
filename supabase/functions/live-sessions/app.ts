@@ -28,7 +28,7 @@
  */
 
 import { OpenAPIHono } from "@hono/zod-openapi"
-import { isSecureRequest, LIVE_WINDOW_SECONDS, publicBasePath, publicBaseUrl, readConfig } from "./utils/config.ts"
+import { LIVE_WINDOW_SECONDS, publicBasePath, publicBaseUrl, readConfig } from "./utils/config.ts"
 import { htmlResponse, jsonResponse } from "./utils/responses.ts"
 import { clientKey, rateLimit } from "./utils/rate-limit.ts"
 import { livePage } from "./views/page.ts"
@@ -41,6 +41,8 @@ export const deps = { fetch: (input: string, init?: RequestInit) => fetch(input,
 const OTP_LIMIT = 5
 const OTP_WINDOW_SECONDS = 600
 const SESSIONS_LIMIT = 120
+const REFRESH_LIMIT = 30
+const REFRESH_WINDOW_SECONDS = 300
 const SESSIONS_WINDOW_SECONDS = 60
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 const BEARER_RE = /^Bearer\s+([A-Za-z0-9._~+/=-]{20,4096})$/
@@ -83,8 +85,12 @@ app.post("/api/otp", async (ctx) => {
   const cfg = readConfig()
   if (!cfg.supabaseUrl || !cfg.anonKey) return jsonResponse({ error: "not_configured" }, 503)
 
-  const secure = isSecureRequest(ctx.req.url, ctx.req.header("x-forwarded-proto") ?? null)
-  const redirectTo = `${publicBaseUrl(ctx.req.url, ctx.req.header("x-forwarded-host") ?? null, secure)}/auth`
+  const base = publicBaseUrl()
+  if (!base) {
+    console.error("LIVE_SESSIONS_PUBLIC_BASE_URL is not set; refusing to send a magic link with an unlisted redirect_to")
+    return jsonResponse({ error: "not_configured" }, 503)
+  }
+  const redirectTo = `${base}/auth`
 
   try {
     const resp = await deps.fetch(`${cfg.supabaseUrl}/auth/v1/otp?redirect_to=${encodeURIComponent(redirectTo)}`, {
@@ -108,6 +114,9 @@ app.post("/api/otp", async (ctx) => {
 
 /** Rotate a refresh token. Pure proxy; GoTrue decides. */
 app.post("/api/refresh", async (ctx) => {
+  const limit = rateLimit(`refresh:${clientKey(ctx.req.raw.headers)}`, REFRESH_LIMIT, REFRESH_WINDOW_SECONDS)
+  if (!limit.allowed) return jsonResponse({ error: "rate_limited", retryAfterSeconds: limit.retryAfterSeconds }, 429)
+
   const body = await readJson(ctx.req.raw)
   const refreshToken = typeof body?.refresh_token === "string" ? body.refresh_token.trim() : ""
   if (!refreshToken || refreshToken.length > 4096) return jsonResponse({ error: "invalid_request" }, 400)

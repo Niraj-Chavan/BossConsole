@@ -81,10 +81,47 @@ Deno.test("GET / renders the page with a nonce'd script and CSP, no-store", with
   assert(!html.includes("unsafe-inline"))
 }))
 
-Deno.test("GET /auth serves the same page (magic-link landing)", withEnv(async () => {
-  const res = await app.request(`${BASE}/auth`)
-  assertEquals(res.status, 200)
-  assertStringIncludes(await res.text(), "access_token") // the fragment harvester is present
+Deno.test("GET /auth and the bare base path serve the same nonce'd page", withEnv(async () => {
+  for (const path of [`${BASE}/auth`, BASE]) {
+    const res = await app.request(path)
+    assertEquals(res.status, 200, path)
+    const nonce = /script-src 'nonce-([^']+)'/.exec(res.headers.get("content-security-policy") ?? "")?.[1]
+    assert(nonce, `${path}: CSP nonce`)
+    assertStringIncludes(await res.text(), `<script nonce="${nonce}">`)
+  }
+}))
+
+Deno.test("POST /api/otp is 503 and sends nothing when LIVE_SESSIONS_PUBLIC_BASE_URL is unset", withEnv(async () => {
+  Deno.env.delete("LIVE_SESSIONS_PUBLIC_BASE_URL")
+  const stub = stubFetch(() => json({}))
+  try {
+    const res = await app.request(`${BASE}/api/otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-forwarded-host": "evil.example" },
+      body: JSON.stringify({ email: "a@b.co" }),
+    })
+    assertEquals(res.status, 503)
+    assertEquals(stub.calls.length, 0)
+  } finally {
+    stub.restore()
+  }
+}))
+
+Deno.test("rate-limit key is the gateway-observed address, not a client-chosen leftmost XFF entry", withEnv(async () => {
+  const stub = stubFetch(() => json({}))
+  try {
+    for (let i = 0; i < 5; i++) {
+      // Attacker rotates the leftmost entry; the gateway-appended rightmost stays the same.
+      const headers = { "Content-Type": "application/json", "x-forwarded-for": `10.0.0.${i}, 203.0.113.9` }
+      const ok = await app.request(`${BASE}/api/otp`, { method: "POST", headers, body: JSON.stringify({ email: "a@b.co" }) })
+      assertEquals(ok.status, 200)
+    }
+    const headers = { "Content-Type": "application/json", "x-forwarded-for": "10.0.0.99, 203.0.113.9" }
+    const blocked = await app.request(`${BASE}/api/otp`, { method: "POST", headers, body: JSON.stringify({ email: "a@b.co" }) })
+    assertEquals(blocked.status, 429)
+  } finally {
+    stub.restore()
+  }
 }))
 
 // ---- otp ----

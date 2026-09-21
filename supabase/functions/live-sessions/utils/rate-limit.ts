@@ -87,16 +87,18 @@ export function resetRateLimits(): void {
 /**
  * Best-effort client identity for rate-limit keys.
  *
- * X-Forwarded-For is caller-controlled in general, but behind the Supabase
- * gateway the LEFTMOST entry is the one the gateway observed. It is still
- * spoofable by anyone who can reach the origin directly, which is another
- * reason this is a brake and not a control.
+ * Proxies APPEND the address they observed to X-Forwarded-For, so the RIGHTMOST entry is the
+ * one our gateway saw and the leftmost is whatever the client chose to send. Cloudflare's
+ * cf-connecting-ip is the single observed address and is preferred when present. Still a
+ * brake and not a control: anyone reaching the origin directly can set either header.
  */
 export function clientKey(headers: Headers): string {
+  const cf = headers.get("cf-connecting-ip")?.trim()
+  if (cf) return cf
   const forwarded = headers.get("x-forwarded-for")
   if (forwarded) {
-    const first = forwarded.split(",")[0].trim()
-    if (first) return first
+    const parts = forwarded.split(",").map((p) => p.trim()).filter(Boolean)
+    if (parts.length > 0) return parts[parts.length - 1]
   }
-  return headers.get("cf-connecting-ip") ?? headers.get("x-real-ip") ?? "unknown"
+  return headers.get("x-real-ip") ?? "unknown"
 }

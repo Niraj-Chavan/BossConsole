@@ -100,17 +100,18 @@ const BOSSTERM_REDIRECT = "bossterm://auth/verify"
 // redirect_to is an https URL back to itself, not an app scheme. For that arm this function does
 // NOT rewrite anything: it bounces to the UNCHANGED GoTrue confirmation URL, which verifies the
 // token and 302s to <base>/auth#access_token=... . Still a pure redirect (no verify call here).
-// Lockstep set is now FOUR places: this prefix, config.toml additional_redirect_urls
-// (".../live-sessions/auth"), live-sessions/utils/config.ts DEFAULT_BASE_PATH, and both email
-// templates' `hasPrefix .RedirectTo` predicate.
-export const LIVE_SESSIONS_REDIRECT_PREFIX = "https://api.risaboss.com/functions/v1/live-sessions/"
-
-// Local Supabase stack equivalent, so the flow is testable with `supabase start`.
-const LIVE_SESSIONS_REDIRECT_PREFIX_LOCAL = "http://127.0.0.1:54321/functions/v1/live-sessions/"
+// EXACT match, like BOSSTERM_REDIRECT: GoTrue allow-lists exactly these values, so a variant never
+// verifies anyway, and matching exactly keeps this arm from forwarding anything GoTrue would not.
+// Lockstep set is FOUR places: these two values, config.toml additional_redirect_urls,
+// live-sessions/utils/config.ts DEFAULT_BASE_PATH (+ LIVE_SESSIONS_PUBLIC_BASE_URL), and both
+// email templates' `eq .RedirectTo` predicate.
+export const LIVE_SESSIONS_REDIRECTS: ReadonlySet<string> = new Set([
+  "https://api.risaboss.com/functions/v1/live-sessions/auth",
+  "http://127.0.0.1:54321/functions/v1/live-sessions/auth", // local `supabase start` stack
+])
 
 export function isLiveSessionsRedirect(redirectTo: string | undefined): boolean {
-  return !!redirectTo &&
-    (redirectTo.startsWith(LIVE_SESSIONS_REDIRECT_PREFIX) || redirectTo.startsWith(LIVE_SESSIONS_REDIRECT_PREFIX_LOCAL))
+  return !!redirectTo && LIVE_SESSIONS_REDIRECTS.has(redirectTo)
 }
 
 /**

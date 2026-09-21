@@ -133,3 +133,8 @@ Deno.test("a redirect_to merely CONTAINING the live-sessions prefix elsewhere is
   const html = await pageFor("/redirect?token=abc&redirect_to=" + encodeURIComponent("https://evil.example/?x=https://api.risaboss.com/functions/v1/live-sessions/"))
   assertStringIncludes(html, "boss://auth/verify?token=abc")
 })
+
+Deno.test("live-sessions arm is an exact match: a sub-path under the prefix is NOT the web arm", async () => {
+  const html = await pageFor("/redirect?token=abc&redirect_to=" + encodeURIComponent("https://api.risaboss.com/functions/v1/live-sessions/other"))
+  assertStringIncludes(html, "boss://auth/verify?token=abc")
+})

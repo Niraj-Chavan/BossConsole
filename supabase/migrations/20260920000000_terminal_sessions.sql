@@ -16,8 +16,6 @@
 -- user's JWT), never by service_role, so RLS is the whole access model.
 -- ============================================================================
 
-BEGIN;
-
 CREATE TABLE IF NOT EXISTS public.terminal_sessions (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id       uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -76,7 +74,7 @@ CREATE TRIGGER terminal_sessions_touch_on_write
 -- ----------------------------------------------------------------------------
 -- Probabilistic cleanup (pattern: organisation_handoff_tokens). A crashed or
 -- offline desktop never deletes its row; anything not heartbeated for 15 min is
--- dead by any definition and gets swept on ~10% of inserts.
+-- dead by any definition and gets swept on ~10% of writes (inserts and heartbeats).
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.trigger_cleanup_stale_terminal_sessions() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
@@ -91,9 +89,11 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trigger_cleanup_stale_terminal_sessions_on_insert ON public.terminal_sessions;
-CREATE TRIGGER trigger_cleanup_stale_terminal_sessions_on_insert
-    AFTER INSERT ON public.terminal_sessions
+-- INSERT OR UPDATE: the heartbeat is an upsert that lands on the UPDATE path, and an
+-- INSERT-only trigger would sweep only when a brand-new share appears.
+DROP TRIGGER IF EXISTS trigger_cleanup_stale_terminal_sessions_on_write ON public.terminal_sessions;
+CREATE TRIGGER trigger_cleanup_stale_terminal_sessions_on_write
+    AFTER INSERT OR UPDATE ON public.terminal_sessions
     FOR EACH ROW EXECUTE FUNCTION public.trigger_cleanup_stale_terminal_sessions();
 
 -- ----------------------------------------------------------------------------
@@ -137,4 +137,3 @@ BEGIN
     END IF;
 END $$;
 
-COMMIT;
