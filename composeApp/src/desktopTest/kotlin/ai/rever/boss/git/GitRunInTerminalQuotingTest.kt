@@ -33,19 +33,22 @@ class GitRunInTerminalQuotingTest {
                         payload: Any,
                         sourceWindowId: String,
                     ) {
-                        (payload as? GitTerminalOpenEvent)?.let(captured::set)
+                        (payload as? GitTerminalOpenEvent)
+                            ?.takeIf { it.sourceWindowId == "win-1" }
+                            ?.let(captured::set)
                     }
                 }
+            val previousProject = GitService.getCurrentProjectPath()
             try {
-                // GitService is a shared singleton - a concurrent clear() in the suite can
-                // null currentProjectPath, and runInTerminal early-returns without it.
-                // Rebind and re-emit until the bridge captures our event; every emission
-                // carries the same command, so repeated emits are harmless.
-                withTimeout(15_000) {
+                // alignCurrentProjectPath binds the global path with no git probing.
+                // GitService is a shared singleton, so a concurrent clear in the suite can
+                // still null it between our bind and the emit - rebind and re-emit until
+                // the bridge captures our event; every emission carries the same command.
+                withTimeout(10_000) {
                     while (captured.get() == null) {
-                        GitService.refresh(dir.absolutePath)
+                        GitService.alignCurrentProjectPath(dir.absolutePath)
                         GitService.runInTerminal("win-1", "status;", "$(touch /tmp/x)")
-                        delay(100)
+                        delay(50)
                     }
                 }
                 // Single-quote-literal quoting is identical on POSIX and PowerShell for
@@ -53,6 +56,11 @@ class GitRunInTerminalQuotingTest {
                 assertEquals("git 'status;' '\$(touch /tmp/x)'", captured.get().command)
             } finally {
                 GitTerminalEventBus.ipcBridge = null
+                if (previousProject != null) {
+                    GitService.alignCurrentProjectPath(previousProject)
+                } else {
+                    GitService.clearCurrentProjectPathForTests()
+                }
                 dir.deleteRecursively()
             }
         }
