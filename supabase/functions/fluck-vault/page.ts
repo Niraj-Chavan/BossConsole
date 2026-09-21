@@ -72,6 +72,8 @@ function luhn(n){if(n.length<13||n.length>19)return false;var sum=0,alt=false;
 for(var i=n.length-1;i>=0;i--){var d=n.charCodeAt(i)-48;
 if(alt){d*=2;if(d>9)d-=9}sum+=d;alt=!alt}return sum%10===0}
 function fail(m){err.textContent=m;return null}
+var ex=form.elements["f3"];if(ex)ex.addEventListener("input",function(){var d=digits(ex.value).slice(0,4);
+ex.value=d.length>2?d.slice(0,2)+"/"+d.slice(2):d});
 function payload(){
 var kind=form.getAttribute("data-kind");
 if(kind==="password"){var p=field("f2");
@@ -79,8 +81,9 @@ if(!p)return fail("Enter the password.");
 return{kind:"password",username:field("f1"),password:p}}
 if(kind==="card"){var pan=digits(field("f2"));
 if(!luhn(pan))return fail("That card number does not look right.");
-var exp=field("f3").trim();
-if(!/^[0-9]{2}\\/[0-9]{2}$/.test(exp))return fail("Enter the expiry as MM/YY.");
+var ed=digits(field("f3"));if(ed.length!==4)return fail("Enter the expiry as MM/YY.");
+var exp=ed.slice(0,2)+"/"+ed.slice(2);var mm=parseInt(ed.slice(0,2),10);
+if(mm<1||mm>12)return fail("The expiry month must be 01 to 12.");
 var name=field("f1").trim();
 if(!name)return fail("Enter the name on the card.");
 var postal=field("f6").trim();
@@ -250,7 +253,7 @@ export async function form(page: FormPage): Promise<Response> {
     : page.kind === "card"
     ? `<label>Name on the card<input name="f1" type="text" autocomplete="off" spellcheck="false" required></label>
 <label>Card number<input name="f2" type="text" inputmode="numeric" autocomplete="off" required></label>
-<div class="row"><label>Expiry<input name="f3" type="text" inputmode="numeric" placeholder="MM/YY" autocomplete="off" required></label>
+<div class="row"><label>Expiry<input name="f3" type="text" inputmode="numeric" placeholder="MM/YY" maxlength="5" autocomplete="off" required></label>
 <label>Postcode<input name="f6" type="text" autocomplete="off" required></label></div>
 <label>Billing address<input name="f4" type="text" autocomplete="off"></label>
 <div class="row"><label>City<input name="f5" type="text" autocomplete="off"></label>

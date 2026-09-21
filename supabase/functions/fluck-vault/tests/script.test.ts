@@ -22,6 +22,8 @@ interface Field {
   value: string
   checked: boolean
   disabled: boolean
+  listeners: Record<string, () => void>
+  addEventListener(type: string, fn: () => void): void
 }
 
 interface Harness {
@@ -30,6 +32,7 @@ interface Harness {
   error: () => string
   submitted: () => number
   enabledFields: () => string[]
+  field: (name: string) => Field
 }
 
 /**
@@ -42,7 +45,16 @@ interface Harness {
 function page(kind: string, sealKey: string): Harness {
   const fields: Record<string, Field> = {}
   for (const name of ["f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10"]) {
-    fields[name] = { value: "", checked: false, disabled: false }
+    const listeners: Record<string, () => void> = {}
+    fields[name] = {
+      value: "",
+      checked: false,
+      disabled: false,
+      listeners,
+      addEventListener(type: string, fn: () => void) {
+        listeners[type] = fn
+      },
+    }
   }
   const out = { value: "" }
   const err = { textContent: "" }
@@ -90,6 +102,7 @@ function page(kind: string, sealKey: string): Harness {
   assert(handler, "the script registered no submit handler")
 
   return {
+    field: (name: string) => fields[name],
     /**
      * Fill the form and press the button.
      *
@@ -297,4 +310,43 @@ Deno.test("a page served a broken sealing key sends nothing and says so", async 
   assertEquals(harness.submitted(), 0)
   assertEquals(harness.ciphertext(), "")
   assertStringIncludes(harness.error(), "could not secure")
+})
+
+Deno.test("the expiry field formats itself as MM/YY while the owner types digits", async () => {
+  const { base64 } = await recipient()
+  const harness = page("card", base64)
+  const f3 = harness.field("f3")
+  for (const typed of ["0", "04", "042", "0429", "04295"]) {
+    f3.value = typed
+    f3.listeners["input"]()
+  }
+  assertEquals(f3.value, "04/29")
+})
+
+Deno.test("four bare digits are accepted as an expiry and a bad month is refused", async () => {
+  const { base64, privateKey } = await recipient()
+  const ok = page("card", base64)
+  await ok.submit({
+    f1: "A Person",
+    f2: "4111111111111111",
+    f3: "0429",
+    f6: "12345",
+    f8: true,
+    f9: "200",
+    f10: "usd",
+  })
+  assertEquals(ok.submitted(), 1)
+  assertEquals(JSON.parse(await open(privateKey, JTI, ok.ciphertext())).exp, "04/29")
+  const bad = page("card", base64)
+  await bad.submit({
+    f1: "A Person",
+    f2: "4111111111111111",
+    f3: "13/29",
+    f6: "12345",
+    f8: true,
+    f9: "200",
+    f10: "usd",
+  })
+  assertEquals(bad.submitted(), 0)
+  assertStringIncludes(bad.error(), "01 to 12")
 })
