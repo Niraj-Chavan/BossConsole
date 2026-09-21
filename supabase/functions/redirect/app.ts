@@ -59,7 +59,16 @@ interface Brand {
   copyright: string
 }
 
-const BRANDS: Record<"boss" | "bossterm", Brand> = {
+const BRANDS: Record<"boss" | "bossterm" | "web", Brand> = {
+  web: {
+    scheme: "https",
+    tokenParam: "token",
+    name: "BOSS Live Sessions",
+    tagline: "Your shared terminals, in the browser",
+    appLabel: "Live Sessions",
+    footerLine: "BOSS Console - Business Operating System as Service",
+    copyright: "© 2025 BOSS. All rights reserved.",
+  },
   boss: {
     scheme: "boss",
     tokenParam: "token",
@@ -86,6 +95,23 @@ const BRANDS: Record<"boss" | "bossterm", Brand> = {
 // Exact-match is intentional: GoTrue only allow-lists this exact URL, so a normalized/
 // trailing-slash variant never reaches here. If the canonical value ever changes, update all three.
 const BOSSTERM_REDIRECT = "bossterm://auth/verify"
+
+// The live-sessions web page (functions/live-sessions) signs users in by magic link too, but its
+// redirect_to is an https URL back to itself, not an app scheme. For that arm this function does
+// NOT rewrite anything: it bounces to the UNCHANGED GoTrue confirmation URL, which verifies the
+// token and 302s to <base>/auth#access_token=... . Still a pure redirect (no verify call here).
+// Lockstep set is now FOUR places: this prefix, config.toml additional_redirect_urls
+// (".../live-sessions/auth"), live-sessions/utils/config.ts DEFAULT_BASE_PATH, and both email
+// templates' `hasPrefix .RedirectTo` predicate.
+export const LIVE_SESSIONS_REDIRECT_PREFIX = "https://api.risaboss.com/functions/v1/live-sessions/"
+
+// Local Supabase stack equivalent, so the flow is testable with `supabase start`.
+const LIVE_SESSIONS_REDIRECT_PREFIX_LOCAL = "http://127.0.0.1:54321/functions/v1/live-sessions/"
+
+export function isLiveSessionsRedirect(redirectTo: string | undefined): boolean {
+  return !!redirectTo &&
+    (redirectTo.startsWith(LIVE_SESSIONS_REDIRECT_PREFIX) || redirectTo.startsWith(LIVE_SESSIONS_REDIRECT_PREFIX_LOCAL))
+}
 
 /**
  * Generates HTML page that auto-redirects to the app's deep link, with a manual
@@ -290,6 +316,7 @@ app.get("/", (c) => {
   let token = c.req.query("token") || c.req.query("token_hash")
   let type = c.req.query("type") || "magiclink"
   let redirectTo = c.req.query("redirect_to")
+  const confirmationUrl = c.req.query("url")
 
   if (!token) {
     const url = c.req.query("url")
@@ -326,6 +353,19 @@ app.get("/", (c) => {
   // intentionally unauthenticated: it only picks brand text and which FIRST-PARTY scheme
   // (boss:// vs bossterm://) the page bounces to — it can never redirect the single-use token
   // to a non-first-party target.
+  // Web (live-sessions) arm: GoTrue must do the verify+redirect itself, so hand the browser the
+  // confirmation URL exactly as the email carried it. The template renders {{ .ConfirmationURL }}
+  // unencoded, so its &type=&redirect_to= landed as top-level params here; rebuild the URL from
+  // them rather than trusting the truncated `url=` value. Only a first-party GoTrue host is ever
+  // emitted: the origin comes from `url=` after an allow-list check, never from the caller freely.
+  if (isLiveSessionsRedirect(redirectTo)) {
+    const origin = firstPartyGoTrueOrigin(confirmationUrl)
+    if (!origin) return c.json({ error: "Unsupported confirmation URL host" }, 400)
+    const target = `${origin}/auth/v1/verify?token=${encodeURIComponent(token)}&type=${encodeURIComponent(type)}` +
+      `&redirect_to=${encodeURIComponent(redirectTo!)}`
+    return c.html(generateRedirectPage(target, BRANDS.web))
+  }
+
   const appKey = c.req.query("app") === "bossterm" || redirectTo === BOSSTERM_REDIRECT
     ? "bossterm"
     : "boss"
@@ -339,6 +379,24 @@ app.get("/", (c) => {
   const html = generateRedirectPage(deepLink, brand)
   return c.html(html)
 })
+
+/**
+ * Origin of the GoTrue confirmation URL, if it is one of ours. The email carries
+ * `https://api.risaboss.com/auth/v1/verify?...` (or the local stack); anything else - a
+ * redirect-through-us to an attacker host - is refused. Keeps the web arm an open redirect
+ * to exactly two first-party hosts.
+ */
+const GOTRUE_ORIGINS = new Set(["https://api.risaboss.com", "http://127.0.0.1:54321", "http://localhost:54321"])
+
+export function firstPartyGoTrueOrigin(confirmationUrl: string | undefined): string | null {
+  if (!confirmationUrl) return null
+  try {
+    const u = new URL(confirmationUrl)
+    return GOTRUE_ORIGINS.has(u.origin) ? u.origin : null
+  } catch {
+    return null
+  }
+}
 
 // 404 handler
 app.notFound((c) => {

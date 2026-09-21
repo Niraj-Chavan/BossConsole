@@ -1,0 +1,219 @@
+/**
+ * Live Sessions Edge Function - routing.
+ *
+ * Lets a BOSS account holder sign in with a magic link from any browser, see
+ * the terminal shares their signed-in BossTerm instances are publishing to
+ * `terminal_sessions`, and open one in the share-viewer.
+ *
+ * Routes (browser-facing base is /functions/v1/live-sessions):
+ *   GET  /            the page (sign-in form or session list)
+ *   GET  /auth        same page; GoTrue's magic-link redirect target. The tokens
+ *                     arrive in the URL FRAGMENT and are read by the page script.
+ *   POST /api/otp     {email} -> sends the magic link with redirect_to=<base>/auth
+ *   POST /api/refresh {refresh_token} -> new access token
+ *   GET  /api/sessions  Bearer <user jwt> -> live rows for that user
+ *   GET  /health
+ *
+ * Trust model. This function never holds a service-role key. `/api/sessions`
+ * forwards the caller's JWT to PostgREST, which validates it and applies the
+ * owner-only RLS on terminal_sessions; a bad or foreign token is a 401 from
+ * PostgREST that we pass straight back. There is nothing for this function to
+ * get wrong about WHO may see WHAT.
+ *
+ * verify_jwt is false (config.toml): `/` and `/auth` are header-less browser
+ * page loads and `/api/otp` is pre-authentication.
+ *
+ * NO CORS MIDDLEWARE, DELIBERATELY - every caller is the page itself, same
+ * origin. HTML only renders on the custom domain (see organisation/app.ts).
+ */
+
+import { OpenAPIHono } from "@hono/zod-openapi"
+import { isSecureRequest, LIVE_WINDOW_SECONDS, publicBasePath, publicBaseUrl, readConfig } from "./utils/config.ts"
+import { htmlResponse, jsonResponse } from "./utils/responses.ts"
+import { clientKey, rateLimit } from "./utils/rate-limit.ts"
+import { livePage } from "./views/page.ts"
+
+export const app = new OpenAPIHono().basePath("/live-sessions")
+
+/** Test seam: the suite swaps this for a stub so no network is touched. */
+export const deps = { fetch: (input: string, init?: RequestInit) => fetch(input, init) }
+
+const OTP_LIMIT = 5
+const OTP_WINDOW_SECONDS = 600
+const SESSIONS_LIMIT = 120
+const SESSIONS_WINDOW_SECONDS = 60
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+const BEARER_RE = /^Bearer\s+([A-Za-z0-9._~+/=-]{20,4096})$/
+
+/** Columns the page needs. `id` is omitted: the page keys nothing on it. */
+const SESSION_COLUMNS =
+  "share_id,device_name,session_name,scope,view_url,control_url,secure,e2e_code,app_version,started_at,last_seen_at"
+
+function page(notice?: string): Response {
+  return htmlResponse((nonce) => livePage({ basePath: publicBasePath(), liveWindowSeconds: LIVE_WINDOW_SECONDS, notice }, nonce))
+}
+
+// Both spellings: the gateway hands us `/live-sessions` for the bare URL and `/live-sessions/` when
+// the browser was given a trailing slash, and Hono matches them as different routes.
+app.get("/", () => page())
+app.get("", () => page())
+app.get("/auth", () => page())
+
+app.get("/health", () => jsonResponse({ status: "healthy" }))
+
+/**
+ * Send a magic link whose redirect_to points back at /auth.
+ *
+ * Always answers 200 {sent:true} on a well-formed email, whatever GoTrue said
+ * about the account, so the endpoint cannot be used to enumerate users. GoTrue's
+ * own `email_sent` rate limit still applies underneath ours.
+ */
+app.post("/api/otp", async (ctx) => {
+  const limit = rateLimit(`otp:${clientKey(ctx.req.raw.headers)}`, OTP_LIMIT, OTP_WINDOW_SECONDS)
+  if (!limit.allowed) {
+    return jsonResponse({ error: "rate_limited", retryAfterSeconds: limit.retryAfterSeconds }, 429)
+  }
+
+  const body = await readJson(ctx.req.raw)
+  const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : ""
+  if (!EMAIL_RE.test(email) || email.length > 254) {
+    return jsonResponse({ error: "invalid_email" }, 400)
+  }
+
+  const cfg = readConfig()
+  if (!cfg.supabaseUrl || !cfg.anonKey) return jsonResponse({ error: "not_configured" }, 503)
+
+  const secure = isSecureRequest(ctx.req.url, ctx.req.header("x-forwarded-proto") ?? null)
+  const redirectTo = `${publicBaseUrl(ctx.req.url, ctx.req.header("x-forwarded-host") ?? null, secure)}/auth`
+
+  try {
+    const resp = await deps.fetch(`${cfg.supabaseUrl}/auth/v1/otp?redirect_to=${encodeURIComponent(redirectTo)}`, {
+      method: "POST",
+      headers: { apikey: cfg.anonKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ email, create_user: true }),
+    })
+    if (resp.status === 429) return jsonResponse({ error: "rate_limited", retryAfterSeconds: 60 }, 429)
+    if (!resp.ok && resp.status >= 500) {
+      console.error("otp upstream", resp.status)
+      return jsonResponse({ error: "upstream" }, 502)
+    }
+  } catch (err) {
+    console.error("otp send failed", err)
+    return jsonResponse({ error: "upstream" }, 502)
+  }
+  // 4xx from GoTrue (unknown user with signups disabled, etc.) is folded into
+  // success on purpose - see the enumeration note above.
+  return jsonResponse({ sent: true })
+})
+
+/** Rotate a refresh token. Pure proxy; GoTrue decides. */
+app.post("/api/refresh", async (ctx) => {
+  const body = await readJson(ctx.req.raw)
+  const refreshToken = typeof body?.refresh_token === "string" ? body.refresh_token.trim() : ""
+  if (!refreshToken || refreshToken.length > 4096) return jsonResponse({ error: "invalid_request" }, 400)
+
+  const cfg = readConfig()
+  if (!cfg.supabaseUrl || !cfg.anonKey) return jsonResponse({ error: "not_configured" }, 503)
+
+  try {
+    const resp = await deps.fetch(`${cfg.supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: { apikey: cfg.anonKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+    if (!resp.ok) return jsonResponse({ error: "refresh_failed" }, 401)
+    const json = await resp.json() as Record<string, unknown>
+    return jsonResponse({ access_token: json.access_token, refresh_token: json.refresh_token })
+  } catch (err) {
+    console.error("refresh failed", err)
+    return jsonResponse({ error: "upstream" }, 502)
+  }
+})
+
+/**
+ * Live sessions for the caller. The JWT goes to PostgREST untouched; RLS
+ * restricts the rows to `auth.uid() = user_id`, and the freshness filter
+ * hides anything the desktop stopped heartbeating.
+ */
+app.get("/api/sessions", async (ctx) => {
+  const token = bearerToken(ctx.req.header("authorization"))
+  if (!token) return jsonResponse({ error: "unauthorized" }, 401)
+
+  const limit = rateLimit(`sessions:${clientKey(ctx.req.raw.headers)}`, SESSIONS_LIMIT, SESSIONS_WINDOW_SECONDS)
+  if (!limit.allowed) return jsonResponse({ error: "rate_limited", retryAfterSeconds: limit.retryAfterSeconds }, 429)
+
+  const cfg = readConfig()
+  if (!cfg.supabaseUrl || !cfg.anonKey) return jsonResponse({ error: "not_configured" }, 503)
+
+  const since = new Date(Date.now() - LIVE_WINDOW_SECONDS * 1000).toISOString()
+  const url = `${cfg.supabaseUrl}/rest/v1/terminal_sessions?select=${SESSION_COLUMNS}` +
+    `&last_seen_at=gt.${encodeURIComponent(since)}&order=last_seen_at.desc&limit=100`
+
+  try {
+    const resp = await deps.fetch(url, {
+      headers: { apikey: cfg.anonKey, Authorization: `Bearer ${token}`, Accept: "application/json" },
+    })
+    if (resp.status === 401 || resp.status === 403) return jsonResponse({ error: "unauthorized" }, 401)
+    if (!resp.ok) {
+      console.error("sessions upstream", resp.status)
+      return jsonResponse({ error: "upstream" }, 502)
+    }
+    const rows = await resp.json()
+    const sessions = Array.isArray(rows) ? rows.filter(isSessionRow) : []
+    return jsonResponse({ sessions, email: emailFromJwt(token) })
+  } catch (err) {
+    console.error("sessions fetch failed", err)
+    return jsonResponse({ error: "upstream" }, 502)
+  }
+})
+
+app.notFound(() => jsonResponse({ error: "not_found" }, 404))
+
+app.onError((err, _ctx) => {
+  console.error("live-sessions error", err)
+  return jsonResponse({ error: "internal" }, 500)
+})
+
+// ---- helpers ----
+
+async function readJson(req: Request): Promise<Record<string, unknown> | null> {
+  try {
+    const text = await req.text()
+    if (text.length > 8192) return null
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+export function bearerToken(header: string | undefined | null): string | null {
+  if (!header) return null
+  const match = BEARER_RE.exec(header.trim())
+  return match ? match[1] : null
+}
+
+/**
+ * Display-only: the email claim of the caller's JWT. The token is NOT verified
+ * here (PostgREST did that for the data), so this is never used for a decision,
+ * only for the "signed in as" label after the data call has already succeeded.
+ */
+export function emailFromJwt(token: string): string {
+  try {
+    const payload = token.split(".")[1]
+    const padded = payload.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - payload.length % 4) % 4)
+    const json = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(padded), (c) => c.charCodeAt(0))))
+    return typeof json.email === "string" ? json.email : ""
+  } catch {
+    return ""
+  }
+}
+
+/** Shape guard so a surprising row can never reach the page as something else. */
+export function isSessionRow(row: unknown): boolean {
+  if (!row || typeof row !== "object") return false
+  const r = row as Record<string, unknown>
+  return typeof r.share_id === "string" && typeof r.device_name === "string" &&
+    typeof r.control_url === "string" && /^https?:\/\//.test(r.control_url) &&
+    typeof r.last_seen_at === "string"
+}
