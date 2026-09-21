@@ -2,6 +2,7 @@ package ai.rever.boss.git
 
 import ai.rever.boss.components.events.GitTerminalEventBus
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
@@ -24,12 +25,21 @@ class GitRunInTerminalQuotingTest {
                 // runInTerminal returns early without a bound project path; refresh is what
                 // binds one, and the git probing it does afterwards is irrelevant to what
                 // the bus sees.
-                GitService.refresh(dir.absolutePath)
                 val received = async { GitTerminalEventBus.openEvents.first() }
 
-                GitService.runInTerminal("win-1", "status;", "$(touch /tmp/x)")
-
-                val event = withTimeout(5_000) { received.await() }
+                // GitService is a shared singleton - a concurrent clear() in the suite can
+                // null currentProjectPath, and runInTerminal early-returns without it.
+                // Rebind and re-emit until the bus sees our event; every emission carries
+                // the same command, so first() is unaffected by the extra emits.
+                withTimeout(15_000) {
+                    while (true) {
+                        GitService.refresh(dir.absolutePath)
+                        GitService.runInTerminal("win-1", "status;", "$(touch /tmp/x)")
+                        if (received.isCompleted) break
+                        delay(250)
+                    }
+                }
+                val event = received.await()
                 // Single-quote-literal quoting is identical on POSIX and PowerShell for
                 // arguments without an embedded quote, so this string holds on every host.
                 assertEquals("git 'status;' '\$(touch /tmp/x)'", event.command)
