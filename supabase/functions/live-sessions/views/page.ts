@@ -203,7 +203,7 @@ const SCRIPT = `
         (s.session_name && s.session_name !== s.device_name ? ' <span class="meta">' + esc(s.session_name) + "</span>" : "") +
         (s.secure ? '<span class="pill ok">E2E ' + esc(s.e2e_code || "") + "</span>" : '<span class="pill warn">not encrypted</span>') +
         "</div>" +
-        '<div class="meta">' + esc(s.scope === "WINDOW" ? "Whole window" : "One tab") +
+        '<div class="meta">' + esc(s.scope === "WINDOW" ? "Whole window" : s.scope === "ALL" ? "All windows" : "One tab") +
         " · started " + esc(ago(s.started_at)) + " · seen " + esc(ago(s.last_seen_at)) + "</div></div>" +
         '<a class="btn" rel="noreferrer">Open</a>';
       li.querySelector("a").setAttribute("href", url);

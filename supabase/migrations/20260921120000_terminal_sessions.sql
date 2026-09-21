@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS public.terminal_sessions (
     share_id      text NOT NULL CHECK (share_id ~ '^[0-9a-f]{16,64}$'),
     device_name   text NOT NULL CHECK (char_length(device_name) BETWEEN 1 AND 120),
     session_name  text CHECK (char_length(session_name) <= 120),
-    scope         text NOT NULL CHECK (scope IN ('TAB', 'WINDOW')),
+    scope         text NOT NULL CHECK (scope IN ('TAB', 'WINDOW', 'ALL')),  -- ShareScope enum names
     -- Read-only viewer link and the account (auto-admit, control) link. Both
     -- carry the E2E secret in the fragment.
     view_url      text NOT NULL CHECK (char_length(view_url) <= 2048),
