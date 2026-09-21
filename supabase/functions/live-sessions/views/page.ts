@@ -80,6 +80,15 @@ const STYLES = `
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--signal-text); }
   footer { margin-top: 28px; color: var(--text-2); font-size: 12px; text-align: center; }
   a { color: var(--signal-text); }
+  /* Embedded viewer: the page becomes a thin bar over a full-height frame. */
+  body.viewing main { max-width: none; padding: 0; height: 100vh; display: flex; flex-direction: column; }
+  body.viewing header, body.viewing #notice, body.viewing .card, body.viewing footer { display: none; }
+  #viewer { display: none; flex: 1; flex-direction: column; min-height: 0; }
+  body.viewing #viewer { display: flex; }
+  #viewerbar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background-color: var(--raised); border-bottom: 1px solid var(--line); font-size: 13px; }
+  #viewerbar .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #viewerbar button, #viewerbar a.btn { padding: 5px 10px; font-size: 12px; }
+  #viewerframe { flex: 1; width: 100%; border: 0; background-color: #000; }
 `
 
 /**
@@ -180,17 +189,53 @@ const SCRIPT = `
     render(data.sessions || [], data.email || "");
   }
 
+  // The viewer is embedded in an iframe rather than navigated to, so the address bar stays on
+  // this page and "back" is instant. The host allows framing only for the account link and only
+  // by this origin; the frame tells us when the session ends (see onFrameMessage).
+  var viewing = null; // { url, label }
+  function openSession(url, label) {
+    if (viewing) return;
+    viewing = { url: url, label: label };
+    stopPolling();
+    if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+    $("viewer-name").textContent = label;
+    $("viewer-newtab").setAttribute("href", url);
+    $("viewerframe").setAttribute("src", url);
+    document.body.classList.add("viewing");
+    try { history.pushState({ view: "session" }, "", location.pathname + location.search); } catch (_) {}
+  }
+  function closeSession(reasonText) {
+    if (!viewing) return;
+    viewing = null;
+    $("viewerframe").setAttribute("src", "about:blank");
+    document.body.classList.remove("viewing");
+    cancelledAutoOpen = true; // do not bounce straight back into a session that just ended
+    if (reasonText) notice(reasonText, null);
+    loadSessions(false).catch(function () {});
+  }
+  function onFrameMessage(ev) {
+    var frame = $("viewerframe");
+    if (!viewing || !frame.contentWindow || ev.source !== frame.contentWindow) return;
+    var d = ev.data;
+    if (!d || d.type !== "bossterm-session-ended") return;
+    closeSession(d.reason === "user" ? "" : "The session ended. Pick another one or wait for it to come back.");
+  }
+  window.addEventListener("message", onFrameMessage);
+  window.addEventListener("popstate", function () { if (viewing) closeSession(""); });
+
   function render(sessions, email) {
     $("who").textContent = email || "";
     var ul = $("sessions");
     ul.innerHTML = "";
+    if (viewing) return; // the frame is up; keep the list fresh underneath, do not reshuffle the view
     if (sessions.length === 1 && !cancelledAutoOpen && !openTimer) {
       var s = sessions[0], url = safeHttpUrl(s.control_url);
       if (url) {
-        $("opening-device").textContent = s.device_name + (s.session_name ? " · " + s.session_name : "");
+        var label = s.device_name + (s.session_name && s.session_name !== s.device_name ? " · " + s.session_name : "");
+        $("opening-device").textContent = label;
         $("opening-link").setAttribute("href", url);
         show("opening");
-        openTimer = setTimeout(function () { openTimer = null; location.assign(url); }, 1500);
+        openTimer = setTimeout(function () { openTimer = null; openSession(url, label); }, 1500);
         return;
       }
     }
@@ -208,7 +253,12 @@ const SCRIPT = `
         '<div class="meta">' + esc(s.scope === "WINDOW" ? "Whole window" : s.scope === "ALL" ? "All windows" : "One tab") +
         " · started " + esc(ago(s.started_at)) + " · seen " + esc(ago(s.last_seen_at)) + "</div></div>" +
         '<a class="btn" rel="noreferrer">Open</a>';
-      li.querySelector("a").setAttribute("href", url);
+      var a = li.querySelector("a");
+      a.setAttribute("href", url);
+      a.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        openSession(url, s.device_name + (s.session_name && s.session_name !== s.device_name ? " · " + s.session_name : ""));
+      });
       ul.appendChild(li);
     });
     show("list");
@@ -241,6 +291,12 @@ const SCRIPT = `
   $("sent-back").addEventListener("click", function () { show("signin"); });
   $("refresh").addEventListener("click", function () { loadSessions(false).catch(function () {}); });
   $("signout").addEventListener("click", function () { signOut(); });
+  $("opening-link").addEventListener("click", function (ev) {
+    ev.preventDefault();
+    if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+    openSession($("opening-link").getAttribute("href"), $("opening-device").textContent);
+  });
+  $("viewer-back").addEventListener("click", function () { closeSession(""); });
   $("opening-cancel").addEventListener("click", function (ev) {
     ev.preventDefault();
     cancelledAutoOpen = true;
@@ -319,6 +375,15 @@ export function livePage(model: PageModel, nonce: string): string {
       <span class="sub">Sessions disappear about ${esc(String(model.liveWindowSeconds))} seconds after BossTerm stops sharing or closes.</span>
     </div>
   </section>
+
+  <div id="viewer">
+    <div id="viewerbar">
+      <button id="viewer-back" class="secondary" type="button">&#8592; Sessions</button>
+      <span class="name" id="viewer-name"></span>
+      <a id="viewer-newtab" class="btn secondary" target="_blank" rel="noopener noreferrer" href="#">Open in new tab</a>
+    </div>
+    <iframe id="viewerframe" title="Shared terminal" allow="clipboard-read; clipboard-write" src="about:blank"></iframe>
+  </div>
 
   <footer>Only you can see this list. Links open the live share-viewer end to end encrypted when the badge shows <code>E2E</code>.</footer>
 </main>

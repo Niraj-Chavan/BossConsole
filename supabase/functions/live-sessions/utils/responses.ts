@@ -49,6 +49,11 @@ function contentSecurityPolicy(nonce: string): string {
     `style-src 'nonce-${nonce}'`,
     "img-src 'self' data:",
     "connect-src 'self'",
+    // The share-viewer is embedded in an iframe so the address bar stays here. Its host is the
+    // user's own tunnel (a different, unpredictable https origin per share), so this is the one
+    // directive that cannot be pinned to a host; the frame src is always one of the user's own
+    // registry rows, filtered to http(s) by isSessionRow and safeHttpUrl.
+    "frame-src https:",
     "form-action 'self'",
     "base-uri 'none'",
     "frame-ancestors 'none'",
