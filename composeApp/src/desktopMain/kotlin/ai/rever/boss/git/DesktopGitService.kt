@@ -1119,10 +1119,10 @@ actual object GitService {
         vararg args: String,
     ) {
         val projectPath = currentProjectPath ?: return
-        // Every argument is interpolated VERBATIM into a shell command string.
-        // There is no in-repo caller today; a future one must pass literal,
-        // trusted arguments only - or shell-quote them, as mergeInTerminal does.
-        val command = "git ${args.joinToString(" ")}"
+        // Every argument lands in a SHELL command string, so each is quoted the same way
+        // mergeInTerminal/rebaseInTerminal quote the ref - a bare join would let `;`, `|`
+        // or `$()` in any argument become live shell for whichever caller arrives first.
+        val command = args.joinToString(" ", prefix = "git ") { CommandProcessor.quotePath(it) }
         GitTerminalEventBus.openGitTerminal(
             command = command,
             workingDirectory = projectPath,
