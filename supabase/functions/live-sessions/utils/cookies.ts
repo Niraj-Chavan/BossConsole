@@ -51,9 +51,13 @@ export function cookieValues(cookieHeader: string | null, name: string): string[
   return out
 }
 
-/** First plausible token under `name`: JWTs and GoTrue refresh tokens are URL-safe base64 + dots. */
+/**
+ * First plausible token under `name`. URL-safe base64 plus dots; the floor is 8, not 20, because
+ * Supabase refresh tokens are 12-character opaque strings and a JWT-sized floor silently dropped
+ * every refresh cookie.
+ */
 export function cookieToken(cookieHeader: string | null, name: string): string | null {
-  return cookieValues(cookieHeader, name).find((v) => /^[A-Za-z0-9._~+/=-]{20,4096}$/.test(v)) ?? null
+  return cookieValues(cookieHeader, name).find((v) => /^[A-Za-z0-9._~+/=-]{8,4096}$/.test(v)) ?? null
 }
 
 function setCookie(name: string, value: string, maxAge: number, secure: boolean, path: string): string {

@@ -163,8 +163,9 @@ const SCRIPT = `
     if (!isPoll) show("loading");
     var r = await api("/api/sessions");
     if (r.status === 401) {
+      // Keep whatever the landing already said (an expired-link error from GoTrue, a failed
+      // /api/session); wiping it here left the user at a blank form with no reason.
       stopPolling(); show("signin");
-      if (!isPoll) notice("", null);
       return;
     }
     if (!r.ok) { notice("Could not load sessions (HTTP " + r.status + "). Retrying…", "error"); show("list"); return; }

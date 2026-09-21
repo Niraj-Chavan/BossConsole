@@ -239,7 +239,8 @@ Deno.test("POST /api/session verifies the token with GoTrue and sets two HttpOnl
     const res = await app.request(`${BASE}/api/session`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...SECURE },
-      body: JSON.stringify({ access_token: jwt, refresh_token: "refresh-token-value-1234" }),
+      // 12 chars: the length Supabase actually issues. A JWT-sized floor rejected real landings.
+      body: JSON.stringify({ access_token: jwt, refresh_token: "ujxg5ngyirim" }),
     })
     assertEquals(res.status, 200)
     assertEquals(await res.json(), { ok: true, email: "me@risalabs.ai" })
@@ -317,7 +318,7 @@ Deno.test("GET /api/sessions rotates an expired access cookie via the refresh co
   })
   try {
     const res = await app.request(`${BASE}/api/sessions`, {
-      headers: { ...SECURE, cookie: `__Secure-boss_live_at=${oldJwt}; __Secure-boss_live_rt=refresh-token-value-1234` },
+      headers: { ...SECURE, cookie: `__Secure-boss_live_at=${oldJwt}; __Secure-boss_live_rt=ujxg5ngyirim` },
     })
     assertEquals(res.status, 200)
     assertEquals((await res.json()).sessions.length, 1)

@@ -59,7 +59,11 @@ const OTP_WINDOW_SECONDS = 600
 const SESSIONS_LIMIT = 120
 const SESSION_LIMIT = 30
 const SESSION_WINDOW_SECONDS = 300
-const TOKEN_RE = /^[A-Za-z0-9._~+/=-]{20,4096}$/
+// Access tokens are JWTs (hundreds of chars); Supabase refresh tokens are SHORT opaque strings
+// (12 chars today), so the two cannot share one minimum. A 20-char floor on both rejected every
+// real magic-link landing with 400.
+const ACCESS_TOKEN_RE = /^[A-Za-z0-9._~+/=-]{20,4096}$/
+const REFRESH_TOKEN_RE = /^[A-Za-z0-9._~+/=-]{8,4096}$/
 const SESSIONS_WINDOW_SECONDS = 60
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 const BEARER_RE = /^Bearer\s+([A-Za-z0-9._~+/=-]{20,4096})$/
@@ -144,7 +148,7 @@ app.post("/api/session", async (ctx) => {
   const body = await readJson(ctx.req.raw)
   const accessToken = typeof body?.access_token === "string" ? body.access_token.trim() : ""
   const refreshToken = typeof body?.refresh_token === "string" ? body.refresh_token.trim() : ""
-  if (!TOKEN_RE.test(accessToken) || (refreshToken && !TOKEN_RE.test(refreshToken))) {
+  if (!ACCESS_TOKEN_RE.test(accessToken) || (refreshToken && !REFRESH_TOKEN_RE.test(refreshToken))) {
     return jsonResponse({ error: "invalid_request" }, 400)
   }
 
