@@ -594,3 +594,11 @@ Deno.test("no log line ever carries a body, a merchant or a full workspace id", 
   assertEquals(joined.includes(WS), false)
   assertStringIncludes(joined, WS.slice(0, 8))
 })
+
+Deno.test("a password page names the site it is saving a login for", async () => {
+  const { handler } = harness({ row: { ...vaultRow(), alias: "united.com" } })
+  const response = await handler(get("/vault", await token()))
+  const html = await response.text()
+  assertStringIncludes(html, "Save your united.com login")
+  assertStringIncludes(html, "Type your united.com username and password once here.")
+})

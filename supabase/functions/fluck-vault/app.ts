@@ -636,8 +636,10 @@ async function get(request: Request, deps: Dependencies, purpose: Purpose): Prom
       note: COPY.cardNote,
     }
     : {
-      title: COPY.passwordTitle,
-      intro: COPY.passwordIntro,
+      title: row.alias ? `Save your ${row.alias} login` : COPY.passwordTitle,
+      intro: row.alias
+        ? `Type your ${row.alias} username and password once here. Fluck never sees them in Messages.`
+        : COPY.passwordIntro,
       kind: "password" as const,
       submit: COPY.passwordSubmit,
       note: COPY.passwordNote,
