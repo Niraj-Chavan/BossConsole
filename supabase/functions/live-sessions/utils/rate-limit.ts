@@ -1,17 +1,11 @@
 /**
- * In-memory fixed-window rate limiting.
+ * In-memory fixed-window rate limiting. (Adapted from organisation/utils/rate-limit.ts.)
  *
- * HONEST ABOUT WHAT THIS IS. The state lives in one edge isolate, so the
- * effective limit is per-isolate and resets when the isolate recycles. It is a
- * brake on the cheap loop -- a script hammering `?t=` guesses, or a stuck admin
- * page retrying a DNS probe -- not a defence against a distributed attacker.
- * The real protections are elsewhere: handoff tokens are single-use, 5-minute
- * and 256-bit, so guessing is not a realistic path in the first place.
- *
- * A shared limiter (a table, or Redis) would be strictly better and is worth
- * doing if any of these endpoints ever becomes interesting to attack. It is not
- * done here because a per-request DB round trip to rate-limit a page render is
- * a worse trade than the protection is worth at this scale.
+ * HONEST ABOUT WHAT THIS IS. The state lives in one edge isolate, so the effective limit is
+ * per-isolate and resets when the isolate recycles. It is a brake on the cheap loop - a script
+ * hammering /api/otp to send mail, or a stuck page polling /api/sessions - not a defence against
+ * a distributed attacker. The real backstop for mail is GoTrue's own `email_sent` limit; for the
+ * data routes it is that every call is authenticated by the caller's own JWT and RLS.
  */
 
 interface Window {
@@ -93,6 +87,11 @@ export function resetRateLimits(): void {
  * brake and not a control: anyone reaching the origin directly can set either header.
  */
 export function clientKey(headers: Headers): string {
+  // Through the cli.risaboss.com Worker the visitor's address arrives in this header (the Worker
+  // reads CF-Connecting-IP on its own inbound request). Spoofable on a direct hit, which only lets
+  // a caller pick their own bucket - the same power X-Forwarded-For already gives them.
+  const viaAlias = headers.get("x-live-sessions-client-ip")?.trim()
+  if (viaAlias) return viaAlias
   const cf = headers.get("cf-connecting-ip")?.trim()
   if (cf) return cf
   const forwarded = headers.get("x-forwarded-for")

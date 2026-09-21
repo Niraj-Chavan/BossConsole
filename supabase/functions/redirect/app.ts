@@ -316,6 +316,9 @@ app.get("/", (c) => {
   // BossTerm-contract alias), else extracted from the full Supabase
   // confirmation URL passed as `url=` (the email-template case).
   let token = c.req.query("token") || c.req.query("token_hash")
+  // Which name the confirmation URL used; the web arm hands the value back to GoTrue, where the
+  // name is meaningful (token vs token_hash), so it must not be rewritten.
+  let tokenParamFromUrl: "token" | "token_hash" | null = null
   let type = c.req.query("type") || "magiclink"
   let redirectTo = c.req.query("redirect_to")
   const confirmationUrl = c.req.query("url")
@@ -326,6 +329,7 @@ app.get("/", (c) => {
       try {
         const parsedUrl = new URL(url)
         token = parsedUrl.searchParams.get("token") || parsedUrl.searchParams.get("token_hash") || undefined
+        if (!parsedUrl.searchParams.get("token") && parsedUrl.searchParams.get("token_hash")) tokenParamFromUrl = "token_hash"
         // Fall back to the already-captured top-level `type`, NOT a hardcoded "magiclink".
         // GoTrue renders the email link with text/template, so {{ .ConfirmationURL }} is NOT
         // percent-encoded: its &type=&redirect_to= split into top-level params on this request,
@@ -363,7 +367,8 @@ app.get("/", (c) => {
   if (isLiveSessionsRedirect(redirectTo)) {
     const origin = firstPartyGoTrueOrigin(confirmationUrl)
     if (!origin) return c.json({ error: "Unsupported confirmation URL host" }, 400)
-    const target = `${origin}/auth/v1/verify?token=${encodeURIComponent(token)}&type=${encodeURIComponent(type)}` +
+    const tokenParam = tokenParamFromUrl ?? (c.req.query("token") ? "token" : c.req.query("token_hash") ? "token_hash" : "token")
+    const target = `${origin}/auth/v1/verify?${tokenParam}=${encodeURIComponent(token)}&type=${encodeURIComponent(type)}` +
       `&redirect_to=${encodeURIComponent(redirectTo!)}`
     return c.html(generateRedirectPage(target, BRANDS.web))
   }
@@ -384,11 +389,12 @@ app.get("/", (c) => {
 
 /**
  * Origin of the GoTrue confirmation URL, if it is one of ours. The email carries
- * `https://api.risaboss.com/auth/v1/verify?...` (or the local stack); anything else - a
- * redirect-through-us to an attacker host - is refused. Keeps the web arm an open redirect
- * to exactly two first-party hosts.
+ * `https://api.risaboss.com/auth/v1/verify?...` (or the local stack at 127.0.0.1:54321, the
+ * address config.toml and the local template use); anything else - a redirect-through-us to an
+ * attacker host - is refused, so the web arm can only ever bounce to these first-party GoTrue
+ * origins.
  */
-const GOTRUE_ORIGINS = new Set(["https://api.risaboss.com", "http://127.0.0.1:54321", "http://localhost:54321"])
+const GOTRUE_ORIGINS = new Set(["https://api.risaboss.com", "http://127.0.0.1:54321"])
 
 export function firstPartyGoTrueOrigin(confirmationUrl: string | undefined): string | null {
   if (!confirmationUrl) return null

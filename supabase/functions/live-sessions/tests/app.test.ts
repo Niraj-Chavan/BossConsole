@@ -435,7 +435,13 @@ Deno.test("on a vanity host, page loads that did not come through the alias are 
   try {
     const direct = await app.request(`${BASE}/auth?x=1`, { headers: { host: "api.risaboss.com" } })
     assertEquals(direct.status, 302)
-    assertEquals(direct.headers.get("location"), "https://cli.risaboss.com/auth?x=1")
+    assertEquals(direct.headers.get("location"), "https://cli.risaboss.com/auth?x=1&_alias=1")
+    assertEquals(direct.headers.get("referrer-policy"), "no-referrer", "redirects carry the security headers too")
+    // Loop breaker: the marked request is served wherever it lands, and X-Forwarded-Host is ignored.
+    const marked = await app.request(`${BASE}/auth?x=1&_alias=1`, { headers: { host: "api.risaboss.com", "x-forwarded-host": "elsewhere.example" } })
+    assertEquals(marked.status, 200)
+    const xfh = await app.request(`${BASE}/auth`, { headers: { host: "cli.risaboss.com", "x-forwarded-host": "api.risaboss.com" } })
+    assertEquals(xfh.status, 200, "a rewritten X-Forwarded-Host must not trigger a redirect")
     const viaAlias = await app.request(`${BASE}/auth`, { headers: { host: "api.risaboss.com", "x-live-sessions-alias": "cli.risaboss.com" } })
     assertEquals(viaAlias.status, 200)
     assertStringIncludes(await viaAlias.text(), 'id="signin-form"')
@@ -450,4 +456,42 @@ Deno.test("on a vanity host, page loads that did not come through the alias are 
 Deno.test("without a vanity host configured, page loads are served wherever they arrive", withEnv(async () => {
   const res = await app.request(`${BASE}/`, { headers: { host: "api.risaboss.com" } })
   assertEquals(res.status, 200)
+}))
+
+Deno.test("POST /api/otp refuses cross-site callers and never creates accounts", withEnv(async () => {
+  const stub = stubFetch(() => json({}))
+  try {
+    const xs = await app.request(`${BASE}/api/otp`, {
+      method: "POST", headers: { "Content-Type": "application/json", "sec-fetch-site": "cross-site" }, body: JSON.stringify({ email: "a@b.co" }),
+    })
+    assertEquals(xs.status, 403)
+    assertEquals(stub.calls.length, 0)
+    const ok = await app.request(`${BASE}/api/otp`, {
+      method: "POST", headers: { "Content-Type": "application/json", "sec-fetch-site": "same-origin" }, body: JSON.stringify({ email: "a@b.co" }),
+    })
+    assertEquals(ok.status, 200)
+    assertEquals(JSON.parse(String(stub.calls[0].init?.body)).create_user, false)
+  } finally {
+    stub.restore()
+  }
+}))
+
+Deno.test("429 responses carry Retry-After", withEnv(async () => {
+  const stub = stubFetch(() => json({}))
+  try {
+    const headers = { "Content-Type": "application/json", "x-forwarded-for": "198.51.100.7" }
+    for (let i = 0; i < 5; i++) await app.request(`${BASE}/api/otp`, { method: "POST", headers, body: JSON.stringify({ email: "a@b.co" }) })
+    const blocked = await app.request(`${BASE}/api/otp`, { method: "POST", headers, body: JSON.stringify({ email: "a@b.co" }) })
+    assertEquals(blocked.status, 429)
+    assert(Number(blocked.headers.get("retry-after")) > 0)
+  } finally {
+    stub.restore()
+  }
+}))
+
+Deno.test("oversized bodies are refused by Content-Length before being read", withEnv(async () => {
+  const res = await app.request(`${BASE}/api/session`, {
+    method: "POST", headers: { "Content-Type": "application/json", "Content-Length": "999999" }, body: "{}",
+  })
+  assertEquals(res.status, 400)
 }))

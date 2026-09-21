@@ -24,12 +24,6 @@ export function publicBasePath(): string {
   return withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash
 }
 
-/** Absolute browser-usable path for a route within this function. */
-export function publicPath(route: string): string {
-  const suffix = route.startsWith("/") ? route : `/${route}`
-  return `${publicBasePath()}${suffix}`
-}
-
 /**
  * Absolute base URL for the GoTrue `redirect_to`, from LIVE_SESSIONS_PUBLIC_BASE_URL only.
  *

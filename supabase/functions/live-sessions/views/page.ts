@@ -29,8 +29,6 @@ import { esc, jsonForScript } from "../utils/html.ts"
 export interface PageModel {
   basePath: string
   liveWindowSeconds: number
-  /** Non-fatal notice to show above the form (e.g. "link expired"). */
-  notice?: string
 }
 
 const STYLES = `
@@ -248,9 +246,9 @@ const SCRIPT = `
 
   function render(sessions, email) {
     $("who").textContent = email || "";
+    if (viewing) return; // the frame is up; leave the list alone until it closes (closeSession reloads)
     var ul = $("sessions");
     ul.innerHTML = "";
-    if (viewing) return; // the frame is up; keep the list fresh underneath, do not reshuffle the view
     if (sessions.length === 1 && !cancelledAutoOpen && !openTimer) {
       var s = sessions[0], url = safeHttpUrl(s.control_url);
       if (url) {
@@ -342,7 +340,7 @@ const SCRIPT = `
 
 export function livePage(model: PageModel, nonce: string): string {
   const cfg = { basePath: model.basePath, liveWindowSeconds: model.liveWindowSeconds }
-  const notice = model.notice ? `<div id="notice" class="notice">${esc(model.notice)}</div>` : `<div id="notice" class="notice hidden"></div>`
+  const notice = `<div id="notice" class="notice hidden"></div>`
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -405,7 +403,7 @@ export function livePage(model: PageModel, nonce: string): string {
       <span class="name" id="viewer-name"></span>
       <a id="viewer-newtab" class="btn secondary" target="_blank" rel="noopener noreferrer" href="#">Open in new tab</a>
     </div>
-    <iframe id="viewerframe" title="Shared terminal" allow="clipboard-read; clipboard-write" src="about:blank"></iframe>
+    <iframe id="viewerframe" title="Shared terminal" allow="clipboard-write" src="about:blank"></iframe>
   </div>
 
   <footer>Only you can see this list. Links open the live share-viewer end to end encrypted when the badge shows <code>E2E</code>.</footer>

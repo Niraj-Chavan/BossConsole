@@ -175,8 +175,7 @@ jobs:
         # --allow-all: the suite sets SUPABASE_URL / SUPABASE_ANON_KEY env vars.
         run: deno test --allow-all
 
-      - name: 🧹 Lint (advisory)
-        continue-on-error: true
+      - name: 🧹 Lint
         run: deno lint
 
   redirect:
@@ -199,3 +198,9 @@ jobs:
 
       - name: 🧪 Tests
         run: deno test --allow-all
+
+      - name: 🧹 Lint (advisory)
+        # Pre-existing findings in app.ts and tests/redirect.test.ts (inline jsr: specifier,
+        # legacy comment); not gating until those are cleaned up. live-sessions lint IS gating.
+        continue-on-error: true
+        run: deno lint

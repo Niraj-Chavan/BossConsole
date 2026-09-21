@@ -138,3 +138,17 @@ Deno.test("live-sessions arm is an exact match: a sub-path under the prefix is N
   const html = await pageFor("/redirect?token=abc&redirect_to=" + encodeURIComponent("https://api.risaboss.com/functions/v1/live-sessions/other"))
   assertStringIncludes(html, "boss://auth/verify?token=abc")
 })
+
+Deno.test("live-sessions arm preserves a token_hash parameter name instead of renaming it", async () => {
+  const rt = "https://cli.risaboss.com/auth"
+  const conf = "https://api.risaboss.com/auth/v1/verify?token_hash=hh123"
+  const html = await pageFor(`/redirect?url=${encodeURIComponent(conf)}&type=magiclink&redirect_to=${encodeURIComponent(rt)}`)
+  assertStringIncludes(html, "auth/v1/verify?token_hash=hh123&amp;type=magiclink")
+})
+
+Deno.test("live-sessions arm accepts the vanity-host landing", async () => {
+  const rt = "https://cli.risaboss.com/auth"
+  const html = await pageFor(`/redirect?url=${encodeURIComponent("https://api.risaboss.com/auth/v1/verify?token=t1")}&type=magiclink&redirect_to=${encodeURIComponent(rt)}`)
+  assertStringIncludes(html, "redirect_to=" + encodeURIComponent(rt).replace(/&/g, "&amp;"))
+  assertStringIncludes(html, "<h1>BossTerm Live Sessions</h1>")
+})

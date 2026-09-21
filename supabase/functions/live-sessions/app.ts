@@ -37,7 +37,7 @@
 
 import { OpenAPIHono } from "@hono/zod-openapi"
 import { LIVE_WINDOW_SECONDS, publicBasePath, publicBaseUrl, readConfig } from "./utils/config.ts"
-import { htmlResponse, jsonResponse } from "./utils/responses.ts"
+import { htmlResponse, jsonResponse, redirectResponse } from "./utils/responses.ts"
 import { clientKey, rateLimit } from "./utils/rate-limit.ts"
 import {
   accessCookieName,
@@ -72,8 +72,8 @@ const BEARER_RE = /^Bearer\s+([A-Za-z0-9._~+/=-]{20,4096})$/
 const SESSION_COLUMNS =
   "share_id,device_name,session_name,scope,view_url,control_url,secure,e2e_code,app_version,started_at,last_seen_at"
 
-function page(notice?: string): Response {
-  return htmlResponse((nonce) => livePage({ basePath: publicBasePath(), liveWindowSeconds: LIVE_WINDOW_SECONDS, notice }, nonce))
+function page(): Response {
+  return htmlResponse((nonce) => livePage({ basePath: publicBasePath(), liveWindowSeconds: LIVE_WINDOW_SECONDS }, nonce))
 }
 
 /**
@@ -93,20 +93,26 @@ function aliasRedirect(ctx: { req: { url: string; header: (n: string) => string 
       return ""
     }
   })()
+  // The Worker marks its requests. The header is client-settable, and that is fine: forging it
+  // only skips this convenience redirect, it grants nothing.
   const viaAlias = ctx.req.header("x-live-sessions-alias")
   if (!baseHost || viaAlias === baseHost) return null
-  // Reached directly on the function's own host; only redirect if that host differs.
-  const reqHost = (ctx.req.header("x-forwarded-host") ?? ctx.req.header("host") ?? "").split(",")[0].trim()
-  // No host at all (tests, odd clients) or the vanity host itself: nothing to correct.
+  // Host only - X-Forwarded-Host is rewritten by gateways and would make this loop. No host at all
+  // (tests, odd clients) or the vanity host itself: nothing to correct.
+  const reqHost = (ctx.req.header("host") ?? "").split(",")[0].trim()
   if (!reqHost || reqHost === baseHost) return null
-  const search = (() => {
+  const url = (() => {
     try {
-      return new URL(ctx.req.url).search
+      return new URL(ctx.req.url)
     } catch {
-      return ""
+      return null
     }
   })()
-  return new Response(null, { status: 302, headers: { Location: `${base}${route}${search}`, "Cache-Control": "no-store" } })
+  // Loop breaker: a request that already carries the marker is served wherever it landed.
+  if (url?.searchParams.get("_alias") === "1") return null
+  const params = new URLSearchParams(url?.search ?? "")
+  params.set("_alias", "1")
+  return redirectResponse(`${base}${route}?${params.toString()}`, { status: 302 })
 }
 
 // Both spellings: the gateway hands us `/live-sessions` for the bare URL and `/live-sessions/` when
@@ -125,9 +131,12 @@ app.get("/health", () => jsonResponse({ status: "healthy" }))
  * own `email_sent` rate limit still applies underneath ours.
  */
 app.post("/api/otp", async (ctx) => {
+  // A magic-link request is always a same-origin fetch from our own page; refuse other sites
+  // driving a visitor's browser (and IP) at this mail-sending endpoint.
+  if (ctx.req.header("sec-fetch-site") === "cross-site") return jsonResponse({ error: "forbidden" }, 403)
   const limit = rateLimit(`otp:${clientKey(ctx.req.raw.headers)}`, OTP_LIMIT, OTP_WINDOW_SECONDS)
   if (!limit.allowed) {
-    return jsonResponse({ error: "rate_limited", retryAfterSeconds: limit.retryAfterSeconds }, 429)
+    return jsonResponse({ error: "rate_limited", retryAfterSeconds: limit.retryAfterSeconds }, 429, [], { "Retry-After": String(limit.retryAfterSeconds) })
   }
 
   const body = await readJson(ctx.req.raw)
@@ -150,10 +159,12 @@ app.post("/api/otp", async (ctx) => {
     const resp = await deps.fetch(`${cfg.supabaseUrl}/auth/v1/otp?redirect_to=${encodeURIComponent(redirectTo)}`, {
       method: "POST",
       headers: { apikey: cfg.anonKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ email, create_user: true }),
+      // No account creation: this page is for the account the user already signs into BossTerm
+      // with. An unknown address gets no mail and the same 200, so nothing is enumerable.
+      body: JSON.stringify({ email, create_user: false }),
     })
     if (resp.status === 429) return jsonResponse({ error: "rate_limited", retryAfterSeconds: 60 }, 429)
-    if (!resp.ok && resp.status >= 500) {
+    if (resp.status >= 500) {
       console.error("otp upstream", resp.status)
       return jsonResponse({ error: "upstream" }, 502)
     }
@@ -311,6 +322,10 @@ async function gotrueRefresh(cfg: { supabaseUrl: string; anonKey: string }, refr
 
 async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   try {
+    // Refuse oversized bodies before buffering them; the length check after reading is the
+    // backstop for a missing Content-Length.
+    const declared = Number(req.headers.get("content-length") ?? "0")
+    if (declared > 8192) return null
     const text = await req.text()
     if (text.length > 8192) return null
     const parsed = JSON.parse(text)

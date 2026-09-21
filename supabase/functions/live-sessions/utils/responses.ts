@@ -9,16 +9,14 @@
 import { cspNonce } from "./html.ts"
 
 /**
- * Headers on EVERY response, HTML or redirect.
+ * Headers on EVERY response, HTML or redirect. (Adapted from organisation/utils/responses.ts.)
  *
- * - `no-store`, and `Vary: Cookie` behind it, because these pages are
- *   per-user: a shared cache holding one member's page and serving it to
- *   another is the whole failure.
- * - `Referrer-Policy: no-referrer` is not decoration. The handoff URL carries
- *   `?t=<bearer token>`, and without this any resource the page references
- *   would ship that token in a Referer header. The 302 strip removes it from
- *   history; this removes it from the wire.
- * - `X-Frame-Options: DENY` because the admin page is all state-changing forms.
+ * - `no-store`, and `Vary: Cookie` behind it, because the session lives in cookies and the
+ *   page is per-user: a shared cache serving one user's list to another is the whole failure.
+ * - `Referrer-Policy: no-referrer`: the page opens share links whose fragment is an E2E
+ *   secret, and its own /auth landing carries tokens in the fragment; nothing here may leak
+ *   into a Referer.
+ * - `X-Frame-Options: DENY`: this page embeds the viewer, nothing embeds this page.
  */
 function baseSecurityHeaders(): Record<string, string> {
   return {
@@ -33,14 +31,9 @@ function baseSecurityHeaders(): Record<string, string> {
 /**
  * Content-Security-Policy for an HTML response.
  *
- * `default-src 'none'` and then only what a page actually needs. There is no
- * `unsafe-inline`: the nonce covers our own inline style and script blocks, and
- * an injected one has no nonce. This is the second line of defence behind
- * esc() -- the first line is that org-controlled strings are escaped at every
- * interpolation.
- *
- * `form-action 'self'` matters specifically here: it stops an injection from
- * repointing an admin form at another origin and harvesting the CSRF nonce.
+ * `default-src 'none'` and then only what the page needs. No `unsafe-inline`: the nonce covers
+ * our own inline style and script, an injected one has no nonce. Second line of defence behind
+ * esc(): every registry value (device and session names) is escaped at interpolation.
  */
 function contentSecurityPolicy(nonce: string): string {
   return [
@@ -87,13 +80,7 @@ export function htmlResponse(
   return new Response(build(nonce), { status: options.status ?? 200, headers })
 }
 
-/**
- * A redirect carrying the same security headers.
- *
- * `status` defaults to 303 (See Other), which is what a form POST must answer
- * with: it converts the follow-up to a GET, so a reload does not re-submit.
- * The handoff strip uses 302 instead - see routes/org-page.ts for why.
- */
+/** A redirect carrying the same security headers. Used for the vanity-host redirect. */
 export function redirectResponse(
   location: string,
   options: { status?: number; headers?: Record<string, string> } = {},
@@ -111,10 +98,11 @@ export function redirectResponse(
  * JSON for the page's same-origin API. `setCookies` are appended one header each: a single
  * `Set-Cookie` string joined with commas is NOT how multiple cookies are sent.
  */
-export function jsonResponse(body: unknown, status = 200, setCookies: string[] = []): Response {
+export function jsonResponse(body: unknown, status = 200, setCookies: string[] = [], extra: Record<string, string> = {}): Response {
   const headers = new Headers({
     "Content-Type": "application/json; charset=utf-8",
     ...baseSecurityHeaders(),
+    ...extra,
   })
   for (const c of setCookies) headers.append("Set-Cookie", c)
   return new Response(JSON.stringify(body), { status, headers })
