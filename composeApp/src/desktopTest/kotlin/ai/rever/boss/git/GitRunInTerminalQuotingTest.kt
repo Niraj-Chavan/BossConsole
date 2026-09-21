@@ -1,12 +1,13 @@
 package ai.rever.boss.git
 
 import ai.rever.boss.components.events.GitTerminalEventBus
-import kotlinx.coroutines.async
+import ai.rever.boss.components.events.GitTerminalOpenEvent
+import ai.rever.boss.ipc.IpcEventBridge
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -21,29 +22,37 @@ class GitRunInTerminalQuotingTest {
     fun `every argument reaches the terminal shell-quoted`() =
         runTest {
             val dir = Files.createTempDirectory("git-run-in-terminal").toFile()
-            try {
-                // runInTerminal returns early without a bound project path; refresh is what
-                // binds one, and the git probing it does afterwards is irrelevant to what
-                // the bus sees.
-                val received = async { GitTerminalEventBus.openEvents.first() }
-
-                // GitService is a shared singleton - a concurrent clear() in the suite can
-                // null currentProjectPath, and runInTerminal early-returns without it.
-                // Rebind and re-emit until the bus sees our event; every emission carries
-                // the same command, so first() is unaffected by the extra emits.
-                withTimeout(15_000) {
-                    while (true) {
-                        GitService.refresh(dir.absolutePath)
-                        GitService.runInTerminal("win-1", "status;", "$(touch /tmp/x)")
-                        if (received.isCompleted) break
-                        delay(250)
+            // Capture through the IPC bridge rather than the shared flow: openGitTerminal
+            // awaits forward() inline, so the event is captured deterministically inside
+            // runInTerminal with no SharedFlow subscriber timing involved.
+            val captured = AtomicReference<GitTerminalOpenEvent>()
+            GitTerminalEventBus.ipcBridge =
+                object : IpcEventBridge {
+                    override suspend fun forward(
+                        eventType: String,
+                        payload: Any,
+                        sourceWindowId: String,
+                    ) {
+                        (payload as? GitTerminalOpenEvent)?.let(captured::set)
                     }
                 }
-                val event = received.await()
+            try {
+                // GitService is a shared singleton - a concurrent clear() in the suite can
+                // null currentProjectPath, and runInTerminal early-returns without it.
+                // Rebind and re-emit until the bridge captures our event; every emission
+                // carries the same command, so repeated emits are harmless.
+                withTimeout(15_000) {
+                    while (captured.get() == null) {
+                        GitService.refresh(dir.absolutePath)
+                        GitService.runInTerminal("win-1", "status;", "$(touch /tmp/x)")
+                        delay(100)
+                    }
+                }
                 // Single-quote-literal quoting is identical on POSIX and PowerShell for
                 // arguments without an embedded quote, so this string holds on every host.
-                assertEquals("git 'status;' '\$(touch /tmp/x)'", event.command)
+                assertEquals("git 'status;' '\$(touch /tmp/x)'", captured.get().command)
             } finally {
+                GitTerminalEventBus.ipcBridge = null
                 dir.deleteRecursively()
             }
         }
