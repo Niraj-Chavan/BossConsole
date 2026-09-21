@@ -14,12 +14,14 @@
  * Token handling, in order, and why:
  *   1. GoTrue's implicit-flow redirect lands on `/auth#access_token=…`. The
  *      fragment never reaches this server, so the page reads it itself.
- *   2. It is copied into sessionStorage (tab-scoped, gone on close) and the
- *      fragment is stripped with history.replaceState so the bearer leaves the
- *      address bar and history.
- *   3. Every data call is same-origin (`connect-src 'self'`) with the token as a
- *      Bearer header; the function forwards it to PostgREST, which validates the
- *      JWT and applies RLS.
+ *   2. It posts the pair ONCE to /api/session, which verifies it with GoTrue and
+ *      sets HttpOnly cookies scoped to this function's path (utils/cookies.ts).
+ *      Then the fragment is stripped with history.replaceState so the bearer
+ *      leaves the address bar and history. The page holds no token afterwards.
+ *   3. Every data call is same-origin (`connect-src 'self'`) with
+ *      credentials: "same-origin"; the server reads the cookie, rotates it via
+ *      the refresh cookie when expired, and forwards the JWT to PostgREST,
+ *      which validates it and applies RLS.
  */
 
 import { esc, jsonForScript } from "../utils/html.ts"
@@ -90,7 +92,6 @@ const SCRIPT = `
   var cfg = JSON.parse(document.getElementById("cfg").textContent);
   var base = cfg.basePath;
   var $ = function (id) { return document.getElementById(id); };
-  var TOKEN_KEY = "boss.live.access", REFRESH_KEY = "boss.live.refresh";
   var pollTimer = null, openTimer = null, cancelledAutoOpen = false;
 
   function show(id) {
@@ -104,21 +105,24 @@ const SCRIPT = `
     n.className = "notice" + (kind ? " " + kind : "");
     n.classList.toggle("hidden", !text);
   }
-  function store(k, v) { try { if (v) sessionStorage.setItem(k, v); else sessionStorage.removeItem(k); } catch (_) {} }
-  function load(k) { try { return sessionStorage.getItem(k); } catch (_) { return null; } }
-
-  // 1. Harvest GoTrue's implicit-flow fragment, then strip it from the URL.
-  function harvestFragment() {
+  // 1. Harvest GoTrue's implicit-flow fragment: hand the tokens to the server (which turns
+  //    them into HttpOnly cookies), then strip the fragment from the URL. Resolves to true when
+  //    a session was established.
+  async function harvestFragment() {
     var h = (location.hash || "").replace(/^#/, "");
-    if (!h) return;
+    if (!h) return false;
     var p = new URLSearchParams(h);
+    history.replaceState(null, "", location.pathname + location.search);
     if (p.get("access_token")) {
-      store(TOKEN_KEY, p.get("access_token"));
-      store(REFRESH_KEY, p.get("refresh_token") || "");
+      try {
+        var r = await api("/api/session", { method: "POST", body: { access_token: p.get("access_token"), refresh_token: p.get("refresh_token") || "" } });
+        if (r.ok) return true;
+        notice("Sign-in link could not be verified (HTTP " + r.status + "). Request a new one.", "error");
+      } catch (_) { notice("Network error while signing in.", "error"); }
     } else if (p.get("error_description") || p.get("error")) {
       notice(p.get("error_description") || p.get("error"), "error");
     }
-    history.replaceState(null, "", location.pathname + location.search);
+    return false;
   }
 
   function esc(s) {
@@ -138,40 +142,30 @@ const SCRIPT = `
     catch (_) { return null; }
   }
 
+  // The cookies are HttpOnly, so there is nothing to attach: same-origin credentials do it.
   async function api(path, opts) {
     opts = opts || {};
     var headers = Object.assign({ "Accept": "application/json" }, opts.headers || {});
-    var token = load(TOKEN_KEY);
-    if (token && opts.auth !== false) headers["Authorization"] = "Bearer " + token;
     if (opts.body) headers["Content-Type"] = "application/json";
     return fetch(base + path, { method: opts.method || "GET", headers: headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined, credentials: "omit" });
+      body: opts.body ? JSON.stringify(opts.body) : undefined, credentials: "same-origin" });
   }
 
-  async function refreshOnce() {
-    var rt = load(REFRESH_KEY);
-    if (!rt) return false;
-    var r = await api("/api/refresh", { method: "POST", body: { refresh_token: rt }, auth: false });
-    if (!r.ok) return false;
-    var j = await r.json();
-    if (!j.access_token) return false;
-    store(TOKEN_KEY, j.access_token); store(REFRESH_KEY, j.refresh_token || rt);
-    return true;
-  }
-
-  function signOut(msg) {
-    store(TOKEN_KEY, null); store(REFRESH_KEY, null);
+  async function signOut(msg) {
     stopPolling();
+    try { await api("/api/logout", { method: "POST" }); } catch (_) {}
     show("signin");
     if (msg) notice(msg, "error");
   }
 
+  // 401 means no usable cookie AND no refreshable one (the server already tried); back to the form.
   async function loadSessions(isPoll) {
     if (!isPoll) show("loading");
     var r = await api("/api/sessions");
     if (r.status === 401) {
-      if (await refreshOnce()) r = await api("/api/sessions");
-      if (r.status === 401) { signOut("Your sign-in expired. Enter your email to get a new link."); return; }
+      stopPolling(); show("signin");
+      if (!isPoll) notice("", null);
+      return;
     }
     if (!r.ok) { notice("Could not load sessions (HTTP " + r.status + "). Retrying…", "error"); show("list"); return; }
     var data = await r.json();
@@ -246,14 +240,16 @@ const SCRIPT = `
     loadSessions(false).catch(function () {});
   });
   document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "visible" && load(TOKEN_KEY) && !$("list").classList.contains("hidden")) {
+    if (document.visibilityState === "visible" && !$("list").classList.contains("hidden")) {
       loadSessions(true).catch(function () {});
     }
   });
 
-  harvestFragment();
-  if (load(TOKEN_KEY)) loadSessions(false).catch(function () { notice("Network error.", "error"); show("list"); });
-  else show("signin");
+  // Boot: establish the cookie session from a fragment if there is one, then ask the server.
+  // A 401 there is the ordinary "not signed in" answer and shows the form.
+  harvestFragment().then(function () {
+    return loadSessions(false);
+  }).catch(function () { notice("Network error.", "error"); show("signin"); });
 })();
 `
 

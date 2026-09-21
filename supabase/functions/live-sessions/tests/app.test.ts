@@ -224,19 +224,163 @@ Deno.test("GET /api/sessions maps a PostgREST 401 (bad/expired JWT) to 401", wit
   }
 }))
 
-// ---- refresh ----
+// ---- cookie session ----
 
-Deno.test("POST /api/refresh proxies GoTrue and returns only the two tokens", withEnv(async () => {
-  const stub = stubFetch(() => json({ access_token: "A", refresh_token: "R", user: { email: "leak@no" } }))
+const SECURE = { "x-forwarded-proto": "https" }
+
+function cookiePairs(res: Response): string[] {
+  return res.headers.getSetCookie()
+}
+
+Deno.test("POST /api/session verifies the token with GoTrue and sets two HttpOnly path-scoped cookies", withEnv(async () => {
+  const jwt = fakeJwt("me@risalabs.ai")
+  const stub = stubFetch((call) => call.url.endsWith("/auth/v1/user") ? json({ email: "me@risalabs.ai" }) : json({}, 500))
   try {
-    const res = await app.request(`${BASE}/api/refresh`, {
+    const res = await app.request(`${BASE}/api/session`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: "old" }),
+      headers: { "Content-Type": "application/json", ...SECURE },
+      body: JSON.stringify({ access_token: jwt, refresh_token: "refresh-token-value-1234" }),
     })
     assertEquals(res.status, 200)
-    assertEquals(await res.json(), { access_token: "A", refresh_token: "R" })
-    assertStringIncludes(stub.calls[0].url, "/auth/v1/token?grant_type=refresh_token")
+    assertEquals(await res.json(), { ok: true, email: "me@risalabs.ai" })
+    const cookies = cookiePairs(res)
+    assertEquals(cookies.length, 2)
+    for (const c of cookies) {
+      assertStringIncludes(c, "HttpOnly")
+      assertStringIncludes(c, "Secure")
+      assertStringIncludes(c, "SameSite=Lax")
+      assertStringIncludes(c, "Path=/functions/v1/live-sessions")
+      assert(c.startsWith("__Secure-boss_live_"), c)
+    }
+    // the GoTrue lookup carried the token being vetted, not a service key
+    const headers = stub.calls[0].init?.headers as Record<string, string>
+    assertEquals(headers.Authorization, `Bearer ${jwt}`)
+  } finally {
+    stub.restore()
+  }
+}))
+
+Deno.test("POST /api/session refuses a token GoTrue does not recognise and sets nothing", withEnv(async () => {
+  const stub = stubFetch(() => json({ msg: "invalid" }, 401))
+  try {
+    const res = await app.request(`${BASE}/api/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...SECURE },
+      body: JSON.stringify({ access_token: fakeJwt("x@y.z") }),
+    })
+    assertEquals(res.status, 401)
+    assertEquals(cookiePairs(res).length, 0)
+  } finally {
+    stub.restore()
+  }
+}))
+
+Deno.test("POST /api/session and /api/logout refuse cross-site callers", withEnv(async () => {
+  for (const path of ["/api/session", "/api/logout"]) {
+    const res = await app.request(`${BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "sec-fetch-site": "cross-site" },
+      body: "{}",
+    })
+    assertEquals(res.status, 403, path)
+  }
+}))
+
+Deno.test("GET /api/sessions authenticates from the access cookie", withEnv(async () => {
+  const jwt = fakeJwt("me@risalabs.ai")
+  const stub = stubFetch(() => json([ROW]))
+  try {
+    const res = await app.request(`${BASE}/api/sessions`, {
+      headers: { ...SECURE, cookie: `__Secure-boss_live_at=${jwt}; other=1` },
+    })
+    assertEquals(res.status, 200)
+    const body = await res.json()
+    assertEquals(body.sessions.length, 1)
+    assertEquals(body.email, "me@risalabs.ai")
+    const headers = stub.calls[0].init?.headers as Record<string, string>
+    assertEquals(headers.Authorization, `Bearer ${jwt}`)
+  } finally {
+    stub.restore()
+  }
+}))
+
+Deno.test("GET /api/sessions rotates an expired access cookie via the refresh cookie on the same response", withEnv(async () => {
+  const oldJwt = fakeJwt("me@risalabs.ai")
+  const newJwt = fakeJwt("me@risalabs.ai") + "n"
+  const stub = stubFetch((call) => {
+    if (call.url.includes("/rest/v1/terminal_sessions")) {
+      const auth = (call.init?.headers as Record<string, string>).Authorization
+      return auth === `Bearer ${newJwt}` ? json([ROW]) : json({ message: "JWT expired" }, 401)
+    }
+    if (call.url.includes("grant_type=refresh_token")) return json({ access_token: newJwt, refresh_token: "refresh-token-value-5678" })
+    return json({}, 500)
+  })
+  try {
+    const res = await app.request(`${BASE}/api/sessions`, {
+      headers: { ...SECURE, cookie: `__Secure-boss_live_at=${oldJwt}; __Secure-boss_live_rt=refresh-token-value-1234` },
+    })
+    assertEquals(res.status, 200)
+    assertEquals((await res.json()).sessions.length, 1)
+    const cookies = cookiePairs(res)
+    assertEquals(cookies.length, 2)
+    assert(cookies.some((c) => c.startsWith(`__Secure-boss_live_at=${newJwt};`)), "new access cookie")
+    assert(cookies.some((c) => c.startsWith("__Secure-boss_live_rt=refresh-token-value-5678;")), "rotated refresh cookie")
+  } finally {
+    stub.restore()
+  }
+}))
+
+Deno.test("GET /api/sessions with a dead refresh cookie is 401 and clears both cookies", withEnv(async () => {
+  const stub = stubFetch((call) => call.url.includes("grant_type=refresh_token") ? json({ msg: "invalid" }, 400) : json({}, 401))
+  try {
+    const res = await app.request(`${BASE}/api/sessions`, {
+      headers: { ...SECURE, cookie: `__Secure-boss_live_rt=refresh-token-value-dead` },
+    })
+    assertEquals(res.status, 401)
+    const cookies = cookiePairs(res)
+    assertEquals(cookies.length, 2)
+    for (const c of cookies) assertStringIncludes(c, "Max-Age=0")
+  } finally {
+    stub.restore()
+  }
+}))
+
+Deno.test("GET /api/sessions with cookies refuses cross-site, but a Bearer caller is not gated on it", withEnv(async () => {
+  const stub = stubFetch(() => json([ROW]))
+  try {
+    const blocked = await app.request(`${BASE}/api/sessions`, {
+      headers: { ...SECURE, cookie: `__Secure-boss_live_at=${fakeJwt("a@b.c")}`, "sec-fetch-site": "cross-site" },
+    })
+    assertEquals(blocked.status, 403)
+    const bearer = await app.request(`${BASE}/api/sessions`, {
+      headers: { Authorization: `Bearer ${fakeJwt("a@b.c")}`, "sec-fetch-site": "cross-site" },
+    })
+    assertEquals(bearer.status, 200)
+  } finally {
+    stub.restore()
+  }
+}))
+
+Deno.test("POST /api/logout clears both cookies", withEnv(async () => {
+  const res = await app.request(`${BASE}/api/logout`, { method: "POST", headers: SECURE })
+  assertEquals(res.status, 200)
+  const cookies = cookiePairs(res)
+  assertEquals(cookies.length, 2)
+  for (const c of cookies) assertStringIncludes(c, "Max-Age=0")
+}))
+
+Deno.test("over plain http the cookies drop the __Secure- prefix and the Secure attribute", withEnv(async () => {
+  const stub = stubFetch(() => json({ email: "a@b.c" }))
+  try {
+    const res = await app.request(`${BASE}/api/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_token: fakeJwt("a@b.c") }),
+    })
+    const cookies = cookiePairs(res)
+    assertEquals(cookies.length, 1)
+    assert(cookies[0].startsWith("boss_live_at="), cookies[0])
+    assert(!cookies[0].includes("Secure"))
   } finally {
     stub.restore()
   }

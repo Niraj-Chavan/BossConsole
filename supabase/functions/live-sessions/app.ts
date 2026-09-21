@@ -10,15 +10,23 @@
  *   GET  /auth        same page; GoTrue's magic-link redirect target. The tokens
  *                     arrive in the URL FRAGMENT and are read by the page script.
  *   POST /api/otp     {email} -> sends the magic link with redirect_to=<base>/auth
- *   POST /api/refresh {refresh_token} -> new access token
- *   GET  /api/sessions  Bearer <user jwt> -> live rows for that user
+ *   POST /api/session {access_token, refresh_token} -> verifies the pair with GoTrue and
+ *                     sets the HttpOnly session cookies (see utils/cookies.ts)
+ *   GET  /api/sessions  cookie (or Bearer) -> live rows for that user; rotates the access
+ *                     cookie via the refresh cookie when it has expired
+ *   POST /api/logout  clears the cookies
  *   GET  /health
  *
  * Trust model. This function never holds a service-role key. `/api/sessions`
  * forwards the caller's JWT to PostgREST, which validates it and applies the
  * owner-only RLS on terminal_sessions; a bad or foreign token is a 401 from
  * PostgREST that we pass straight back. There is nothing for this function to
- * get wrong about WHO may see WHAT.
+ * get wrong about WHO may see WHAT. The cookies only move that JWT from the
+ * page's hands into the browser's cookie jar.
+ *
+ * Cookie-authenticated routes refuse `Sec-Fetch-Site: cross-site`. The header is
+ * not settable by page script, so with SameSite=Lax this is what stops another
+ * origin from riding the cookies.
  *
  * verify_jwt is false (config.toml): `/` and `/auth` are header-less browser
  * page loads and `/api/otp` is pre-authentication.
@@ -31,6 +39,14 @@ import { OpenAPIHono } from "@hono/zod-openapi"
 import { LIVE_WINDOW_SECONDS, publicBasePath, publicBaseUrl, readConfig } from "./utils/config.ts"
 import { htmlResponse, jsonResponse } from "./utils/responses.ts"
 import { clientKey, rateLimit } from "./utils/rate-limit.ts"
+import {
+  accessCookieName,
+  clearCookieHeaders,
+  cookieToken,
+  isSecureRequest,
+  refreshCookieName,
+  sessionCookieHeaders,
+} from "./utils/cookies.ts"
 import { livePage } from "./views/page.ts"
 
 export const app = new OpenAPIHono().basePath("/live-sessions")
@@ -41,8 +57,9 @@ export const deps = { fetch: (input: string, init?: RequestInit) => fetch(input,
 const OTP_LIMIT = 5
 const OTP_WINDOW_SECONDS = 600
 const SESSIONS_LIMIT = 120
-const REFRESH_LIMIT = 30
-const REFRESH_WINDOW_SECONDS = 300
+const SESSION_LIMIT = 30
+const SESSION_WINDOW_SECONDS = 300
+const TOKEN_RE = /^[A-Za-z0-9._~+/=-]{20,4096}$/
 const SESSIONS_WINDOW_SECONDS = 60
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 const BEARER_RE = /^Bearer\s+([A-Za-z0-9._~+/=-]{20,4096})$/
@@ -112,31 +129,44 @@ app.post("/api/otp", async (ctx) => {
   return jsonResponse({ sent: true })
 })
 
-/** Rotate a refresh token. Pure proxy; GoTrue decides. */
-app.post("/api/refresh", async (ctx) => {
-  const limit = rateLimit(`refresh:${clientKey(ctx.req.raw.headers)}`, REFRESH_LIMIT, REFRESH_WINDOW_SECONDS)
+/**
+ * Establish the cookie session from the tokens the magic link left in the fragment.
+ *
+ * The access token is checked against GoTrue (`/auth/v1/user`) before anything is set, so a
+ * garbage or foreign token never becomes a cookie, and the response can tell the page who it
+ * signed in as without the page decoding a JWT.
+ */
+app.post("/api/session", async (ctx) => {
+  if (ctx.req.header("sec-fetch-site") === "cross-site") return jsonResponse({ error: "forbidden" }, 403)
+  const limit = rateLimit(`session:${clientKey(ctx.req.raw.headers)}`, SESSION_LIMIT, SESSION_WINDOW_SECONDS)
   if (!limit.allowed) return jsonResponse({ error: "rate_limited", retryAfterSeconds: limit.retryAfterSeconds }, 429)
 
   const body = await readJson(ctx.req.raw)
+  const accessToken = typeof body?.access_token === "string" ? body.access_token.trim() : ""
   const refreshToken = typeof body?.refresh_token === "string" ? body.refresh_token.trim() : ""
-  if (!refreshToken || refreshToken.length > 4096) return jsonResponse({ error: "invalid_request" }, 400)
+  if (!TOKEN_RE.test(accessToken) || (refreshToken && !TOKEN_RE.test(refreshToken))) {
+    return jsonResponse({ error: "invalid_request" }, 400)
+  }
 
   const cfg = readConfig()
   if (!cfg.supabaseUrl || !cfg.anonKey) return jsonResponse({ error: "not_configured" }, 503)
 
-  try {
-    const resp = await deps.fetch(`${cfg.supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
-      method: "POST",
-      headers: { apikey: cfg.anonKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    })
-    if (!resp.ok) return jsonResponse({ error: "refresh_failed" }, 401)
-    const json = await resp.json() as Record<string, unknown>
-    return jsonResponse({ access_token: json.access_token, refresh_token: json.refresh_token })
-  } catch (err) {
-    console.error("refresh failed", err)
-    return jsonResponse({ error: "upstream" }, 502)
-  }
+  const user = await gotrueUser(cfg, accessToken)
+  if (!user) return jsonResponse({ error: "unauthorized" }, 401)
+
+  const secure = isSecureRequest(ctx.req.url, ctx.req.header("x-forwarded-proto") ?? null)
+  return jsonResponse(
+    { ok: true, email: user.email ?? "" },
+    200,
+    sessionCookieHeaders(accessToken, refreshToken || null, secure, publicBasePath()),
+  )
+})
+
+/** Sign out of the page: drop both cookies. The desktop app's own session is untouched. */
+app.post("/api/logout", (ctx) => {
+  if (ctx.req.header("sec-fetch-site") === "cross-site") return jsonResponse({ error: "forbidden" }, 403)
+  const secure = isSecureRequest(ctx.req.url, ctx.req.header("x-forwarded-proto") ?? null)
+  return jsonResponse({ ok: true }, 200, clearCookieHeaders(secure, publicBasePath()))
 })
 
 /**
@@ -145,8 +175,15 @@ app.post("/api/refresh", async (ctx) => {
  * hides anything the desktop stopped heartbeating.
  */
 app.get("/api/sessions", async (ctx) => {
-  const token = bearerToken(ctx.req.header("authorization"))
-  if (!token) return jsonResponse({ error: "unauthorized" }, 401)
+  const secure = isSecureRequest(ctx.req.url, ctx.req.header("x-forwarded-proto") ?? null)
+  const cookieHeader = ctx.req.header("cookie") ?? null
+  const bearer = bearerToken(ctx.req.header("authorization"))
+  let token = bearer ?? cookieToken(cookieHeader, accessCookieName(secure))
+  const refreshToken = bearer ? null : cookieToken(cookieHeader, refreshCookieName(secure))
+  const viaCookie = !bearer
+
+  if (viaCookie && ctx.req.header("sec-fetch-site") === "cross-site") return jsonResponse({ error: "forbidden" }, 403)
+  if (!token && !refreshToken) return jsonResponse({ error: "unauthorized" }, 401)
 
   const limit = rateLimit(`sessions:${clientKey(ctx.req.raw.headers)}`, SESSIONS_LIMIT, SESSIONS_WINDOW_SECONDS)
   if (!limit.allowed) return jsonResponse({ error: "rate_limited", retryAfterSeconds: limit.retryAfterSeconds }, 429)
@@ -154,26 +191,23 @@ app.get("/api/sessions", async (ctx) => {
   const cfg = readConfig()
   if (!cfg.supabaseUrl || !cfg.anonKey) return jsonResponse({ error: "not_configured" }, 503)
 
-  const since = new Date(Date.now() - LIVE_WINDOW_SECONDS * 1000).toISOString()
-  const url = `${cfg.supabaseUrl}/rest/v1/terminal_sessions?select=${SESSION_COLUMNS}` +
-    `&last_seen_at=gt.${encodeURIComponent(since)}&order=last_seen_at.desc&limit=100`
-
-  try {
-    const resp = await deps.fetch(url, {
-      headers: { apikey: cfg.anonKey, Authorization: `Bearer ${token}`, Accept: "application/json" },
-    })
-    if (resp.status === 401 || resp.status === 403) return jsonResponse({ error: "unauthorized" }, 401)
-    if (!resp.ok) {
-      console.error("sessions upstream", resp.status)
-      return jsonResponse({ error: "upstream" }, 502)
+  // One rotation: an expired access cookie (or none, after ACCESS_MAX_AGE) is exchanged via the
+  // refresh cookie, and the fresh pair rides back on this same response.
+  let setCookies: string[] = []
+  let rows = token ? await fetchRows(cfg, token) : { status: 401, rows: null }
+  if (rows.status === 401 && viaCookie && refreshToken) {
+    const rotated = await gotrueRefresh(cfg, refreshToken)
+    if (rotated) {
+      token = rotated.accessToken
+      setCookies = sessionCookieHeaders(rotated.accessToken, rotated.refreshToken, secure, publicBasePath())
+      rows = await fetchRows(cfg, token)
     }
-    const rows = await resp.json()
-    const sessions = Array.isArray(rows) ? rows.filter(isSessionRow) : []
-    return jsonResponse({ sessions, email: emailFromJwt(token) })
-  } catch (err) {
-    console.error("sessions fetch failed", err)
-    return jsonResponse({ error: "upstream" }, 502)
   }
+  if (rows.status === 401) {
+    return jsonResponse({ error: "unauthorized" }, 401, viaCookie ? clearCookieHeaders(secure, publicBasePath()) : [])
+  }
+  if (rows.status !== 200 || !rows.rows) return jsonResponse({ error: "upstream" }, 502)
+  return jsonResponse({ sessions: rows.rows, email: emailFromJwt(token!) }, 200, setCookies)
 })
 
 app.notFound(() => jsonResponse({ error: "not_found" }, 404))
@@ -184,6 +218,59 @@ app.onError((err, _ctx) => {
 })
 
 // ---- helpers ----
+
+async function fetchRows(cfg: { supabaseUrl: string; anonKey: string }, token: string): Promise<{ status: number; rows: unknown[] | null }> {
+  const since = new Date(Date.now() - LIVE_WINDOW_SECONDS * 1000).toISOString()
+  const url = `${cfg.supabaseUrl}/rest/v1/terminal_sessions?select=${SESSION_COLUMNS}` +
+    `&last_seen_at=gt.${encodeURIComponent(since)}&order=last_seen_at.desc&limit=100`
+  try {
+    const resp = await deps.fetch(url, {
+      headers: { apikey: cfg.anonKey, Authorization: `Bearer ${token}`, Accept: "application/json" },
+    })
+    if (resp.status === 401 || resp.status === 403) return { status: 401, rows: null }
+    if (!resp.ok) {
+      console.error("sessions upstream", resp.status)
+      return { status: resp.status, rows: null }
+    }
+    const body = await resp.json()
+    return { status: 200, rows: Array.isArray(body) ? body.filter(isSessionRow) : [] }
+  } catch (err) {
+    console.error("sessions fetch failed", err)
+    return { status: 502, rows: null }
+  }
+}
+
+/** GoTrue's view of the token's user, or null when it is not a valid live token. */
+async function gotrueUser(cfg: { supabaseUrl: string; anonKey: string }, token: string): Promise<{ email?: string } | null> {
+  try {
+    const resp = await deps.fetch(`${cfg.supabaseUrl}/auth/v1/user`, {
+      headers: { apikey: cfg.anonKey, Authorization: `Bearer ${token}` },
+    })
+    if (!resp.ok) return null
+    const json = await resp.json() as Record<string, unknown>
+    return { email: typeof json.email === "string" ? json.email : undefined }
+  } catch (err) {
+    console.error("gotrue user lookup failed", err)
+    return null
+  }
+}
+
+async function gotrueRefresh(cfg: { supabaseUrl: string; anonKey: string }, refreshToken: string): Promise<{ accessToken: string; refreshToken: string } | null> {
+  try {
+    const resp = await deps.fetch(`${cfg.supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: { apikey: cfg.anonKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+    if (!resp.ok) return null
+    const json = await resp.json() as Record<string, unknown>
+    if (typeof json.access_token !== "string") return null
+    return { accessToken: json.access_token, refreshToken: typeof json.refresh_token === "string" ? json.refresh_token : refreshToken }
+  } catch (err) {
+    console.error("refresh failed", err)
+    return null
+  }
+}
 
 async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   try {

@@ -102,12 +102,15 @@ export function redirectResponse(
 }
 
 /** JSON, for /health only. Pages are always HTML. */
-export function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: new Headers({
-      "Content-Type": "application/json; charset=utf-8",
-      ...baseSecurityHeaders(),
-    }),
+/**
+ * JSON for the page's same-origin API. `setCookies` are appended one header each: a single
+ * `Set-Cookie` string joined with commas is NOT how multiple cookies are sent.
+ */
+export function jsonResponse(body: unknown, status = 200, setCookies: string[] = []): Response {
+  const headers = new Headers({
+    "Content-Type": "application/json; charset=utf-8",
+    ...baseSecurityHeaders(),
   })
+  for (const c of setCookies) headers.append("Set-Cookie", c)
+  return new Response(JSON.stringify(body), { status, headers })
 }
