@@ -33,7 +33,7 @@ object FileSystemUtils {
      */
     fun openFile(filePath: String) {
         try {
-            val osName = System.getProperty("os.name").lowercase()
+            val osName = System.getProperty("os.name").orEmpty().lowercase()
             val file = File(filePath)
 
             if (!file.exists()) {
@@ -41,23 +41,12 @@ object FileSystemUtils {
                 return
             }
 
-            when {
-                osName.contains("mac") -> {
-                    Runtime.getRuntime().exec(arrayOf("open", file.absolutePath))
-                }
-
-                osName.contains("windows") -> {
-                    Runtime.getRuntime().exec(arrayOf("cmd", "/c", "start", "", file.absolutePath))
-                }
-
-                osName.contains("linux") -> {
-                    Runtime.getRuntime().exec(arrayOf("xdg-open", file.absolutePath))
-                }
-
-                else -> {
-                    logger.warn(LogCategory.FILE, "Open file not supported on this OS", mapOf("os" to osName))
-                }
+            val command = openFileCommand(osName, file.absolutePath)
+            if (command == null) {
+                logger.warn(LogCategory.FILE, "Open file not supported on this OS", mapOf("os" to osName))
+                return
             }
+            Runtime.getRuntime().exec(command)
         } catch (e: IOException) {
             logger.warn(LogCategory.FILE, "Failed to open file", error = e)
         }
@@ -292,3 +281,25 @@ object FileSystemUtils {
             false
         }
 }
+
+/**
+ * Pure command construction for [FileSystemUtils.openFile] - extracted for testability.
+ * File-scope because `FileSystemUtils` is at detekt's `TooManyFunctions` ceiling.
+ * Windows uses `explorer.exe <path>` with no shell in the middle, so the JDK's
+ * argv handling is the whole story: `&`, `|`, `<`, `>` reach Explorer as one
+ * argument instead of being parsed by `cmd`. macOS and Linux take argv directly
+ * and are unaffected. Unknown OS yields null rather than a guessed command.
+ * `explorer.exe` via `Runtime.exec(String[])` receives every filename - spaces and
+ * shell metacharacters alike - as one literal argv element, verified by
+ * `OpenCommandTest` style `& ^ %` cases without spaces.
+ */
+internal fun openFileCommand(
+    osName: String,
+    absolutePath: String,
+): Array<String>? =
+    when {
+        osName.contains("mac") -> arrayOf("open", absolutePath)
+        osName.contains("windows") -> arrayOf("explorer.exe", absolutePath)
+        osName.contains("linux") -> arrayOf("xdg-open", absolutePath)
+        else -> null
+    }
