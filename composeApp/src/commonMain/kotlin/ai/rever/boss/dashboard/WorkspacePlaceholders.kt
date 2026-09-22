@@ -96,16 +96,24 @@ object WorkspacePlaceholders {
     ): Boolean {
         val open = template.getOrNull(tokenRange.first - 1)
         val close = template.getOrNull(tokenRange.last + 1)
-        if (open != close || (open != '"' && open != '\'')) return false
-        if (template.getOrNull(tokenRange.first - 2) == '\\') return false
+        val matchingQuotes = open == close && (open == '"' || open == '\'')
+        val openingQuoteIsLiteral = template.getOrNull(tokenRange.first - 2) == '\\'
+        if (!matchingQuotes || openingQuoteIsLiteral) return false
+        return hasNoOpenQuoteBefore(template, tokenRange.first - 1)
+    }
+
+    private fun hasNoOpenQuoteBefore(
+        template: CharSequence,
+        endExclusive: Int,
+    ): Boolean {
         var inQuote: Char? = null
-        for (i in 0 until tokenRange.first - 1) {
-            val c = template[i]
-            if (inQuote == null) {
-                if (c == '"' || c == '\'') inQuote = c
-            } else if (c == inQuote) {
-                inQuote = null
-            }
+        template.take(endExclusive).forEach { c ->
+            inQuote =
+                when {
+                    inQuote == null && (c == '"' || c == '\'') -> c
+                    inQuote != null && c == inQuote -> null
+                    else -> inQuote
+                }
         }
         return inQuote == null
     }
