@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
@@ -48,6 +50,9 @@ actual object StartupSettingsManager {
      * assignment: the two steps order completely, and the later one wins.
      */
     private val stateLock = Any()
+
+    /** Serializes persistence so an older update cannot finish after a newer one. */
+    private val persistenceLock = Mutex()
 
     /** Bumped before every in-memory mutation; guarded by [stateLock]. */
     private var mutationEpoch = 0L
@@ -104,13 +109,18 @@ actual object StartupSettingsManager {
      * Save current settings to persistent storage.
      */
     actual suspend fun saveSettings() =
+        persistenceLock.withLock {
+            val snapshot = synchronized(stateLock) { _currentSettings.value }
+            saveSnapshot(snapshot)
+        }
+
+    private suspend fun saveSnapshot(settings: StartupSettings) =
         withContext(Dispatchers.IO) {
             try {
-                val content = json.encodeToString(StartupSettings.serializer(), _currentSettings.value)
+                val content = json.encodeToString(StartupSettings.serializer(), settings)
                 // Temp sibling + atomic move, the same pattern as every other settings file
                 // here: a crash mid-write leaves at most a stray temp, never a truncated
-                // startup-settings.json that the next launch would parse as a fresh install,
-                // and concurrent writers cannot interleave their bytes.
+                // startup-settings.json that the next launch would parse as a fresh install.
                 settingsFile.atomicWriteText(content)
                 logger.debug(LogCategory.SYSTEM, "Settings saved")
             } catch (
@@ -124,13 +134,17 @@ actual object StartupSettingsManager {
      * Update settings and persist.
      */
     actual suspend fun updateSettings(settings: StartupSettings) {
-        synchronized(stateLock) {
-            // Bumped and published as one step under [stateLock]: a load fenced on an older
-            // epoch cannot then publish over this value, however the threads interleave.
-            mutationEpoch++
-            _currentSettings.value = settings
+        persistenceLock.withLock {
+            synchronized(stateLock) {
+                // Bumped and published as one step under [stateLock]: a load fenced on an older
+                // epoch cannot then publish over this value, however the threads interleave.
+                mutationEpoch++
+                _currentSettings.value = settings
+            }
+            // Keep the snapshot paired with the mutation while persistence is serialized, so
+            // an older update cannot write after a newer one.
+            saveSnapshot(settings)
         }
-        saveSettings()
     }
 
     /**

@@ -1,6 +1,8 @@
 package ai.rever.boss.startup
 
 import ai.rever.boss.plugin.pathutils.BossDirectories
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import kotlin.test.BeforeTest
@@ -102,6 +104,20 @@ class DesktopStartupSettingsManagerTest {
         // value: last write wins, and the state self-heals.
         runBlocking { StartupSettingsManager.loadSettings() }
         assertEquals(5555L, StartupSettingsManager.currentSettings.value.workspaceLoadTimeoutMs)
+    }
+
+    @Test
+    fun `concurrent updates leave disk at the final in-memory value`() = runBlocking {
+        coroutineScope {
+            launch { StartupSettingsManager.updateSettings(StartupSettings(workspaceLoadTimeoutMs = 1010L)) }
+            launch { StartupSettingsManager.updateSettings(StartupSettings(workspaceLoadTimeoutMs = 2020L)) }
+        }
+
+        val persisted = settingsFile.readText()
+        assertTrue(
+            persisted.contains(StartupSettingsManager.currentSettings.value.workspaceLoadTimeoutMs.toString()),
+            "the serialized write order must match the final in-memory update",
+        )
     }
 
     /**
