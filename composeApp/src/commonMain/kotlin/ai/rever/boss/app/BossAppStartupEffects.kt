@@ -194,7 +194,7 @@ internal fun BossAppStartupEffects(state: BossAppState) {
 
     // Cancel any active drag when window loses focus (prevents stuck ghost)
     LaunchedEffect(state.tabDragComponent, windowId) {
-        WindowFocusManager.focusedWindowFlow.collect { focusedWindowId ->
+        WindowFocusManager.activeWindowFlow.collect { focusedWindowId ->
             // If this window lost focus and there's an active drag, cancel it
             if (focusedWindowId != windowId && state.tabDragComponent.isDragging) {
                 state.tabDragComponent.cancelDrag()
