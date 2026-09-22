@@ -127,7 +127,7 @@ object SnippetLibraryManager {
             val now = clock()
             val snippet =
                 Snippet(
-                    id = generateId(),
+                    id = generateUniqueId(),
                     title = title,
                     body = body,
                     tags = normalizeTags(tags),
@@ -185,7 +185,13 @@ object SnippetLibraryManager {
 
     private fun normalizeTags(t: List<String>): List<String> = t.mapNotNull { it.trim().ifEmpty { null } }.distinct()
 
-    private fun generateId(): String = "snippet-${clock()}-${(0..9999).random()}"
+    private fun generateUniqueId(): String {
+        var id: String
+        do {
+            id = "snippet-${clock()}-${(0..9999).random()}"
+        } while (_snippets.value.any { it.id == id })
+        return id
+    }
 
     private suspend fun persist(snippets: List<Snippet>) =
         withContext(Dispatchers.IO) {

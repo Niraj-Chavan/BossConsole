@@ -135,4 +135,26 @@ class NotificationCenterTest {
         assertEquals(NotificationLevel.INFO, NotificationLevel.fromString(null))
         assertEquals(NotificationLevel.ERROR, NotificationLevel.fromString("error"))
     }
+
+    @Test
+    fun `loading an oversized file keeps only the newest entries`() {
+        val entries =
+            (0 until NotificationCenter.MAX_ENTRIES + 5).map { index ->
+                BossNotification(id = "n$index", title = "N$index", createdAt = index.toLong())
+            }
+        tempFile.writeText(json.encodeToString(NotificationStore.serializer(), NotificationStore(entries)))
+        NotificationCenter.resetForTesting(tempFile)
+
+        assertEquals(NotificationCenter.MAX_ENTRIES, NotificationCenter.notifications.value.size)
+        assertEquals("n0", NotificationCenter.notifications.value.first().id)
+        assertEquals("n${NotificationCenter.MAX_ENTRIES - 1}", NotificationCenter.notifications.value.last().id)
+    }
+
+    @Test
+    fun `ids remain unique when the clock and random source collide`() =
+        runBlocking {
+            NotificationCenter.clock = { 1_000L }
+            repeat(10) { NotificationCenter.post("N$it") }
+            assertEquals(10, NotificationCenter.notifications.value.map { it.id }.toSet().size)
+        }
 }

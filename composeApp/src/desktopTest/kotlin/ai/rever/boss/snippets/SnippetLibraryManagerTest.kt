@@ -170,4 +170,12 @@ class SnippetLibraryManagerTest {
             val strays = tempDir.listFiles()?.filter { it.name != "snippets.json" } ?: emptyList()
             assertTrue(strays.isEmpty(), "no temp files should remain: $strays")
         }
+
+    @Test
+    fun `ids remain unique when the clock and random source collide`() =
+        runBlocking {
+            SnippetLibraryManager.clock = { 1_000L }
+            repeat(10) { SnippetLibraryManager.add("N$it", "body") }
+            assertEquals(10, SnippetLibraryManager.snippets.value.map { it.id }.toSet().size)
+        }
 }

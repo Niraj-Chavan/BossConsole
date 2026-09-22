@@ -65,7 +65,7 @@ object NotificationCenter {
         try {
             if (storageFile.exists()) {
                 val store = json.decodeFromString(NotificationStore.serializer(), storageFile.readText())
-                _notifications.value = store.notifications
+                _notifications.value = store.notifications.take(MAX_ENTRIES)
             } else {
                 _notifications.value = emptyList()
             }
@@ -100,7 +100,7 @@ object NotificationCenter {
         return mutex.withLock {
             val entry =
                 BossNotification(
-                    id = "notif-${clock()}-${(0..9999).random()}",
+                    id = generateUniqueId(),
                     title = title,
                     message = message,
                     level = level,
@@ -160,4 +160,12 @@ object NotificationCenter {
                 logger.warn(LogCategory.SYSTEM, "Failed to save notifications", error = e)
             }
         }
+
+    private fun generateUniqueId(): String {
+        var id: String
+        do {
+            id = "notif-${clock()}-${(0..9999).random()}"
+        } while (_notifications.value.any { it.id == id })
+        return id
+    }
 }
