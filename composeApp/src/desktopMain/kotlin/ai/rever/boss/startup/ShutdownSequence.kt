@@ -2,6 +2,7 @@ package ai.rever.boss.startup
 
 import ai.rever.boss.app.LastSessionCoordinator
 import ai.rever.boss.cache.HighQualityFaviconService
+import ai.rever.boss.components.plugin.DefaultPlugin
 import ai.rever.boss.dashboard.RecentBrowserPagesManager
 import ai.rever.boss.dashboard.RecentFilesManager
 import ai.rever.boss.performance.PerformanceMonitor
@@ -51,6 +52,14 @@ object ShutdownSequence {
                     RecentFilesManager.flushPendingSaves()
                     RecentBrowserPagesManager.flushPendingSaves()
                     UserDataStorage.flushPendingSaves()
+                }
+            },
+            ShutdownStep("awaiting window plugin teardown") {
+                // Window close deliberately does not join plugin teardown - joining is the
+                // b07 UI stall. Here, at process exit, is the one place that may wait:
+                // bounded, so a wedged teardown cannot hang quit either.
+                runBlocking {
+                    DefaultPlugin.awaitPendingTeardowns(DefaultPlugin.PLUGIN_DISPOSE_TIMEOUT_MS)
                 }
             },
             ShutdownStep("stopping performance monitor") {

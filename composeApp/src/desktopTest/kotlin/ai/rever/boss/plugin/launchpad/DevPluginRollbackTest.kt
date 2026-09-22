@@ -422,6 +422,9 @@ class DevPluginRollbackTest {
                     dynamicPluginManager = manager,
                     persistedPlugins = listOf(storeEntry),
                     devRoot = stagingRoot,
+                    // The test's store build lives under tempDir, so declare it
+                    // as this test's managed plugins root.
+                    pluginsDir = tempDir.toFile(),
                 )
 
             val pluginResult = results[pluginId]
@@ -595,6 +598,9 @@ class DevPluginRollbackTest {
                     dynamicPluginManager = manager,
                     persistedPlugins = listOf(storeEntry),
                     devRoot = stagingRoot,
+                    // The test's store build lives under tempDir, so declare it
+                    // as this test's managed plugins root.
+                    pluginsDir = tempDir.toFile(),
                 )
 
             val pluginResult = results[pluginId]
