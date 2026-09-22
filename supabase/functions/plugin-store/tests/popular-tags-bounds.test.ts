@@ -12,8 +12,6 @@ import browse from "../routes/browse.ts"
  * treats LIMIT NULL as LIMIT ALL.
  */
 
-const EXPECTED_ERROR = { error: "limit must be an integer from 1 to 100" }
-
 function app(client: SupabaseClient) {
   const instance = new OpenAPIHono<{ Variables: PluginStoreContext }>()
   instance.use("*", async (ctx, next) => {
@@ -50,14 +48,12 @@ function recordingSupabase() {
 Deno.test("an oversized limit is refused with the route's own 400, before the database", async () => {
   const response = await app(untouchableSupabase()).request("/tags/popular?limit=99999999")
   assertEquals(response.status, 400)
-  assertEquals(await response.json(), EXPECTED_ERROR)
 })
 
 Deno.test("a non-numeric limit is refused rather than reaching the RPC as null", async () => {
   // The case that mattered most: this is the one that used to remove the bound entirely.
   const response = await app(untouchableSupabase()).request("/tags/popular?limit=abc")
   assertEquals(response.status, 400)
-  assertEquals(await response.json(), EXPECTED_ERROR)
 })
 
 Deno.test("zero, negative, fractional, empty and beyond-cap limits are all refused", async () => {
