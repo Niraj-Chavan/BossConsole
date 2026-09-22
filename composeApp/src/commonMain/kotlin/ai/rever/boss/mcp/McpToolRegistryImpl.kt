@@ -827,31 +827,12 @@ internal class McpToolRegistryCore(
         toolName: String,
         arguments: String,
     ): McpToolResult {
-<<<<<<< HEAD
-        // A registered tool wins over an alias of the same name (direct lookup
-        // first); an alias resolves to its canonical definition, so the
-        // canonical's disabled/permission state decides, never the alias name's.
-        val directTool = _tools.value.firstOrNull { it.definition.name == toolName }
-        val alias = if (directTool == null) resolveAlias(toolName) else null
-        val tool =
-            directTool
-                ?: alias?.let { (providerId, canonicalName) ->
-                    _tools.value.firstOrNull {
-                        it.providerId == providerId && it.definition.name == canonicalName
-                    }
-                }
-                ?: return McpToolResult(
-                    unavailableToolMessage(alias?.second ?: toolName),
-                    isError = true,
-                )
-=======
         val tool =
             findInvocableTool(toolName)
                 ?: return McpToolResult(
                     unavailableToolMessage(resolveAlias(toolName)?.second ?: toolName),
                     isError = true,
                 )
->>>>>>> aebb033f7 (refactor(mcp): extract invocable-tool lookup out of invoke)
         val args = parseArgs(arguments)
         // Policy is consulted under the canonical name: an alias must inherit the
         // canonical tool's policy, not fall back to whatever default the alias's
