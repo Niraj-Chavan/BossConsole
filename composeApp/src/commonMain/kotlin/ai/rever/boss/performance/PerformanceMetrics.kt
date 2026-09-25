@@ -54,8 +54,9 @@ data class PerformanceSettings(
     /**
      * Returns a validated copy of settings with values clamped to valid ranges.
      */
-    fun validated(): PerformanceSettings =
-        copy(
+    fun validated(): PerformanceSettings {
+        val clampedHeapMb = pluginJvmHeapMb.coerceIn(128, 8192)
+        return copy(
             memoryWarningThresholdPercent = memoryWarningThresholdPercent.coerceIn(1, 100),
             memoryCriticalThresholdPercent = memoryCriticalThresholdPercent.coerceIn(1, 100),
             cpuWarningThresholdPercent = cpuWarningThresholdPercent.coerceIn(1, 100),
@@ -65,9 +66,10 @@ data class PerformanceSettings(
             resourceSampleIntervalMs = resourceSampleIntervalMs.coerceAtLeast(100),
             gcSampleIntervalMs = gcSampleIntervalMs.coerceAtLeast(100),
             historyRetentionMinutes = historyRetentionMinutes.coerceIn(1, MAX_HISTORY_RETENTION_MINUTES),
-            pluginJvmHeapMb = pluginJvmHeapMb.coerceIn(128, 8192),
-            pluginJvmInitialHeapMb = pluginJvmInitialHeapMb.coerceIn(32, pluginJvmHeapMb),
+            pluginJvmHeapMb = clampedHeapMb,
+            pluginJvmInitialHeapMb = pluginJvmInitialHeapMb.coerceIn(32, clampedHeapMb),
         )
+    }
 }
 
 /**
